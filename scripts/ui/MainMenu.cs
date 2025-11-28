@@ -1,4 +1,5 @@
 using Godot;
+using Kuros.Utils;
 
 namespace Kuros.UI
 {
@@ -7,12 +8,18 @@ namespace Kuros.UI
     /// </summary>
     public partial class MainMenu : Control
     {
+        private const string CompendiumScenePath = "res://scenes/ui/windows/CompendiumWindow.tscn";
+
         [ExportCategory("UI References")]
         [Export] public Button StartGameButton { get; private set; } = null!;
         [Export] public Button ModeSelectionButton { get; private set; } = null!;
         [Export] public Button LoadGameButton { get; private set; } = null!;
         [Export] public Button SettingsButton { get; private set; } = null!;
         [Export] public Button QuitButton { get; private set; } = null!;
+        [Export] public Button CompendiumButton { get; private set; } = null!;
+        [Export] public CompendiumWindow? CompendiumWindow { get; private set; }
+
+        private PackedScene? _compendiumScene;
 
         // 信号
         [Signal] public delegate void StartGameRequestedEventHandler();
@@ -34,6 +41,11 @@ namespace Kuros.UI
                 ModeSelectionButton = GetNodeOrNull<Button>("MenuPanel/VBoxContainer/ModeSelectionButton");
             }
 
+            if (CompendiumButton == null)
+            {
+                CompendiumButton = GetNodeOrNull<Button>("MenuPanel/VBoxContainer/CompendiumButton");
+            }
+
             if (LoadGameButton == null)
             {
                 LoadGameButton = GetNodeOrNull<Button>("MenuPanel/VBoxContainer/LoadGameButton");
@@ -49,6 +61,9 @@ namespace Kuros.UI
                 QuitButton = GetNodeOrNull<Button>("MenuPanel/VBoxContainer/QuitButton");
             }
 
+            CompendiumWindow ??= GetNodeOrNull<CompendiumWindow>("CompendiumWindow");
+            CompendiumWindow ??= GetNodeOrNull<Control>("CompendiumWindow") as CompendiumWindow;
+
             // 连接按钮信号
             if (StartGameButton != null)
             {
@@ -58,6 +73,11 @@ namespace Kuros.UI
             if (ModeSelectionButton != null)
             {
                 ModeSelectionButton.Pressed += OnModeSelectionPressed;
+            }
+
+            if (CompendiumButton != null)
+            {
+                CompendiumButton.Pressed += OnCompendiumPressed;
             }
 
             if (LoadGameButton != null)
@@ -79,31 +99,78 @@ namespace Kuros.UI
         private void OnStartGamePressed()
         {
             EmitSignal(SignalName.StartGameRequested);
-            GD.Print("开始游戏");
+            GameLogger.Info(nameof(MainMenu), "开始游戏");
         }
 
         private void OnModeSelectionPressed()
         {
             EmitSignal(SignalName.ModeSelectionRequested);
-            GD.Print("打开模式选择");
+            GameLogger.Info(nameof(MainMenu), "打开模式选择");
         }
 
         private void OnLoadGamePressed()
         {
             EmitSignal(SignalName.LoadGameRequested);
-            GD.Print("打开存档选择");
+            GameLogger.Info(nameof(MainMenu), "打开存档选择");
         }
 
         private void OnSettingsPressed()
         {
             EmitSignal(SignalName.SettingsRequested);
-            GD.Print("打开设置");
+            GameLogger.Info(nameof(MainMenu), "打开设置");
         }
 
         private void OnQuitPressed()
         {
             EmitSignal(SignalName.QuitRequested);
-            GD.Print("退出游戏");
+            GameLogger.Info(nameof(MainMenu), "退出游戏");
+        }
+
+        private void OnCompendiumPressed()
+        {
+            var window = GetOrCreateCompendiumWindow();
+            if (window == null)
+            {
+                GD.PrintErr("CompendiumWindow 未找到");
+                return;
+            }
+
+            if (window.Visible)
+            {
+                window.HideWindow();
+            }
+            else
+            {
+                window.ShowWindow();
+            }
+        }
+
+        private CompendiumWindow? GetOrCreateCompendiumWindow()
+        {
+            if (CompendiumWindow != null)
+            {
+                return CompendiumWindow;
+            }
+
+            _compendiumScene ??= GD.Load<PackedScene>(CompendiumScenePath);
+            if (_compendiumScene == null)
+            {
+                GD.PrintErr("无法加载图鉴窗口：", CompendiumScenePath);
+                return null;
+            }
+
+            var instance = _compendiumScene.Instantiate();
+            if (instance is not CompendiumWindow window)
+            {
+                GD.PrintErr("CompendiumWindow 场景存在，但脚本未正确加载。");
+                instance.QueueFree();
+                return null;
+            }
+
+            AddChild(window);
+            // HideWindow() is called in CompendiumWindow._Ready(), so no need to call it here
+            CompendiumWindow = window;
+            return CompendiumWindow;
         }
     }
 }
