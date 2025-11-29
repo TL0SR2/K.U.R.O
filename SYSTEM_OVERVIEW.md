@@ -43,6 +43,12 @@
 - `scripts/items/tags/ItemTagIds.cs`、`ItemAttribute*`  
   - 定义常用标签/属性集合，背包和逻辑可通过标签快速筛选（如食物、武器）。
 
+- 交互/拾取/放下/投掷流程：  
+  - 地图物品：`WorldItemEntity` 挂在 tscn 中，触发 `take_up` 时会把 `InventoryItemStack` 写入玩家背包、触发 `PlayerInventoryComponent.ItemPicked`，并可在 `ItemDefinition.EffectEntries` 中配置拾取效果。  
+  - 快捷键：`PlayerItemInteractionComponent` 监听 `put_down` 与 `throw`，从背包槽位抽出物品，通过 `WorldItemSpawner` 生成地面实体；投掷会施加初速度。  
+  - 骨骼绑定：`PlayerItemAttachment` 订阅 `ItemPicked`/`ItemRemoved`，将最新拾取物品图标附着在指定骨骼或节点上，放下/投掷时自动清除。  
+  - 快捷栏：`QuickSlotBar` 订阅 `InventoryContainer.InventoryChanged`，实时展示前几格物品与数量，便于 Debug 与 UI 集成。
+
 ## 3. 战斗系统
 
 - `scripts/actors/heroes/SamplePlayer.cs`、`scripts/actors/enemies/*.cs`  
@@ -71,6 +77,12 @@
 
 - 管理器与控制器：`scripts/controllers/*`、`scripts/managers/*`  
   - 如 `EnemySpawnController` 负责敌人生成；`CameraFollow`、`UIManager` 管理场景级别逻辑。
+
+- 地图互动体系：`scripts/core/interactions/*`、`scripts/actors/npc/*.cs`  
+  - `IInteractable` 定义统一交互接口；`InteractableArea` 可挂在场景中检测玩家进入、可选按键触发并支持高亮。  
+  - `BaseInteractable` 封装交互开关、次数限制与对话触发，可在 Inspector 绑定 `DialogueSequence` 与实现了 `IDialoguePlayer` 的节点。  
+  - `scripts/core/interactions/dialogue/*` 提供对白资源结构（`DialogueLine` / `DialogueSequence`）与 `IDialoguePlayer` 接口，方便接入 UI。  
+  - 示例 `NpcDialogueInteractable`（`scripts/actors/npc/NpcDialogueInteractable.cs`）展示如何构建可对话 NPC；`scenes/ExampleBattle.tscn` 已实例化 `FriendlyNPC` 供测试。
 
 - 工具与日志：`scripts/utils/GameLogger.cs` 等提供调试输出、通用辅助函数。
 
