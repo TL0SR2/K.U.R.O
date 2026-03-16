@@ -170,7 +170,10 @@ namespace Kuros.Managers
 
 		private void ApplyProjectSettings(WindowPreset preset)
 		{
-			ProjectSettings.SetSetting("display/window/size/mode", preset.Mode == DisplayServer.WindowMode.Fullscreen ? 2 : 0);
+			ProjectSettings.SetSetting(
+				"display/window/size/mode",
+				(preset.Mode == DisplayServer.WindowMode.ExclusiveFullscreen || preset.Mode == DisplayServer.WindowMode.Fullscreen) ? 2 : 0
+			);
 			ProjectSettings.SetSetting("display/window/size/viewport_width", preset.Size.X);
 			ProjectSettings.SetSetting("display/window/size/viewport_height", preset.Size.Y);
 			ProjectSettings.SetSetting("display/window/size/initial_position_type", 2);
