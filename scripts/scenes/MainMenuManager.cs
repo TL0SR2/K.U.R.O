@@ -253,7 +253,6 @@ namespace Kuros.Scenes
 			{
 				_isLoadingScene = false;
 				GameLogger.Error(nameof(MainMenuManager), $"场景加载失败: {_pendingScenePath}");
-				_pendingScenePath = "";
 				if (_loadingScreen != null && !_loadingScreen.IsLoadingComplete())
 					_loadingScreen.SetLoadingComplete();
 			}
