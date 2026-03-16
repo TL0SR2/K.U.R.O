@@ -13,5 +13,4 @@ texture = ExtResource("1_477kv")
 [node name="Sprite2D2" type="Sprite2D" parent="."]
 visible = false
 position = Vector2(1928.933, 498.364)
-scale = Vector2(0.333, 0.333)
 texture = ExtResource("2_0n407")
