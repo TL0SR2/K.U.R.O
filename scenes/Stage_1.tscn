@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://ufprfd4r8ijj" path="res://assets/spine/main_character/main_character.tscn" id="4_givaq"]
 [ext_resource type="Script" uid="uid://cn2bsvambjids" path="res://scripts/controllers/EnemySpawnController.cs" id="21_kt4h1"]
 [ext_resource type="PackedScene" uid="uid://cofm45kotvgto" path="res://scenes/actors/enemies/Enemy_B1_fat.tscn" id="22_uvtj7"]
-[ext_resource type="Texture2D" uid="uid://cggx01ms6yloy" path="res://textures/environments/wall/25.12.3 卧室下墙壁.png" id="26_yy663"]
+[ext_resource type="Texture2D" uid="uid://sinhag8w2ijl" path="res://textures/environments/wall/25.12.3 卧室下墙壁.png" id="26_yy663"]
 [ext_resource type="PackedScene" path="res://scenes/actors/npc/SimpleNPC.tscn" id="27_28u5u"]
 [ext_resource type="PackedScene" uid="uid://cwnslqteb78nc" path="res://scenes/objects/Static_A1_sink.tscn" id="28_61adh"]
 [ext_resource type="PackedScene" uid="uid://dh4uaik8ybpc" path="res://scenes/objects/Static_A1_stove.tscn" id="29_223i8"]
@@ -89,6 +89,7 @@ metadata/_edit_lock_ = true
 
 [node name="MainCharacter" parent="World" instance=ExtResource("4_givaq")]
 position = Vector2(317, 454)
+Speed = 500.0
 
 [node name="Camera2D" type="Camera2D" parent="World/MainCharacter"]
 position = Vector2(-18.75, -781.25)
