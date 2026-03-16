@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://ufprfd4r8ijj" path="res://assets/spine/main_character/main_character.tscn" id="4_givaq"]
 [ext_resource type="Script" uid="uid://cn2bsvambjids" path="res://scripts/controllers/EnemySpawnController.cs" id="21_kt4h1"]
 [ext_resource type="PackedScene" uid="uid://cofm45kotvgto" path="res://scenes/actors/enemies/Enemy_B1_fat.tscn" id="22_uvtj7"]
-[ext_resource type="Texture2D" uid="uid://sinhag8w2ijl" path="res://textures/environments/wall/25.12.3 卧室下墙壁.png" id="26_yy663"]
+[ext_resource type="Texture2D" uid="uid://cggx01ms6yloy" path="res://textures/environments/wall/25.12.3 卧室下墙壁.png" id="26_yy663"]
 [ext_resource type="PackedScene" path="res://scenes/actors/npc/SimpleNPC.tscn" id="27_28u5u"]
 [ext_resource type="PackedScene" uid="uid://cwnslqteb78nc" path="res://scenes/objects/Static_A1_sink.tscn" id="28_61adh"]
 [ext_resource type="PackedScene" uid="uid://dh4uaik8ybpc" path="res://scenes/objects/Static_A1_stove.tscn" id="29_223i8"]
@@ -96,7 +96,7 @@ scale = Vector2(6.25, 6.25)
 limit_left = 0
 limit_top = 10
 limit_right = 3854
-limit_bottom = 1080
+limit_bottom = 925
 drag_horizontal_enabled = true
 drag_vertical_enabled = true
 
