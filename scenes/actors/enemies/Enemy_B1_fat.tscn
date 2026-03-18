@@ -37,14 +37,17 @@ size = Vector2(98.90625, 100.714294)
 
 [sub_resource type="CapsuleShape2D" id="3"]
 radius = 33.088234
-height = 176.4706
+height = 122.595085
 
 [node name="Enemy_B1_fat" type="CharacterBody2D" node_paths=PackedStringArray("DetectionArea", "AttackArea", "StateMachine", "EffectController")]
+z_index = 1
+position = Vector2(2, -4)
 collision_layer = 2
 motion_mode = 1
 script = ExtResource("1")
 DetectionArea = NodePath("Sprite2D/ControllerDetectionArea")
 AttackArea = NodePath("Sprite2D/AttackArea")
+AttackCooldown = 1.0
 StateMachine = NodePath("StateMachine")
 EffectController = NodePath("EffectController")
 LootTable = ExtResource("18_drop_table")
@@ -55,12 +58,13 @@ script = ExtResource("12")
 [node name="Shadow" type="Sprite2D" parent="."]
 show_behind_parent = true
 material = SubResource("ShaderMaterial_b5vhy")
-position = Vector2(13.000001, 83)
+position = Vector2(13.000001, 5.9675903)
 scale = Vector2(8.625, 1.075)
 texture = ExtResource("5_2sv5o")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
 modulate = Color(0.8, 0.6, 0.5, 1)
+position = Vector2(0, -77.03241)
 scale = Vector2(3.2, 2.8)
 
 [node name="AttackArea" type="Area2D" parent="Sprite2D"]
@@ -95,7 +99,7 @@ position = Vector2(-3.828125, -16.25)
 shape = SubResource("5")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(1, -132)
+position = Vector2(1, -137.03241)
 scale = Vector2(2.98, 2.235)
 shape = SubResource("3")
 
@@ -123,6 +127,7 @@ RequiredRightInputs = 2
 DetectionAreaPath = NodePath("../../../../Sprite2D/AttackDetectionArea")
 GrabAreaPath = NodePath("../../../../Sprite2D/AttackArea")
 DashSpeed = 150.0
+DashDistance = 30.0
 AppliedFrozenDuration = 3.0
 metadata/attack_weight = 60.0
 
@@ -130,6 +135,7 @@ metadata/attack_weight = 60.0
 script = ExtResource("8")
 WarmupDuration = 1.0
 CooldownDuration = 0.5
+RequireAnimationHitTrigger = true
 metadata/attack_weight = 40.0
 
 [node name="Hit" type="Node" parent="StateMachine"]
@@ -152,7 +158,7 @@ script = ExtResource("11")
 FreezeDuration = 1.0
 
 [node name="SpineSprite" type="SpineSprite" parent="."]
-position = Vector2(11, 80.00001)
+position = Vector2(11, 2.9676056)
 scale = Vector2(0.33, 0.33)
 skeleton_data_res = ExtResource("14_xv2am")
 preview_skin = "Default"
