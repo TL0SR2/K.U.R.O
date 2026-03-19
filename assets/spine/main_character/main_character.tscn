@@ -86,6 +86,7 @@ scale = Vector2(1.0000002, 0.99999994)
 bone_name = "WQ"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+visible = false
 position = Vector2(-39.39393, -174.1477)
 scale = Vector2(0.9999999, 0.9999999)
 shape = SubResource("RectangleShape2D_ixg0x")
@@ -111,6 +112,7 @@ shape = SubResource("RectangleShape2D_tdm7a")
 disabled = true
 
 [node name="GrabArea" type="Area2D" parent="."]
+visible = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="GrabArea"]
 position = Vector2(342.5, -656)
