@@ -36,19 +36,36 @@ func flash_damage(root: Node, color: Color) -> void:
 # 动画控制相关
 func play_animation(root: Node, anim_name: String, loop: bool, mix_duration: float = 0.1, time_scale: float = 1.0) -> bool:
 	var sprite = find_spine_node(root)
-	if not sprite: return false
+	if not sprite:
+		print("[SpineWrapper] ERROR: 無法找到 SpineSprite 節點在: ", root)
+		return false
+	
+	print("[SpineWrapper] 找到 SpineSprite: ", sprite)
 	
 	var state = sprite.get_animation_state()
-	if not state: return false
+	if not state:
+		print("[SpineWrapper] ERROR: 無法獲得 AnimationState")
+		return false
 	
+	print("[SpineWrapper] 嘗試播放動畫: ", anim_name, " (loop: ", loop, ")")
 	var entry = state.set_animation(anim_name, loop)
+	
 	if entry:
+		print("[SpineWrapper] 動畫播放成功，設置參數...")
 		# Use setter methods instead of direct property assignment
 		if entry.has_method("set_mix_duration"):
 			entry.set_mix_duration(mix_duration)
 		if entry.has_method("set_time_scale"):
 			entry.set_time_scale(time_scale)
-	return true
+		return true
+	else:
+		print("[SpineWrapper] ERROR: set_animation() 返回 nil，動畫可能不存在或其他錯誤")
+		# 嘗試列舉所有可用動畫
+		var skeleton = sprite.get_skeleton()
+		if skeleton and skeleton.has_method("get_animations"):
+			var animations = skeleton.get_animations()
+			print("[SpineWrapper] 可用的動畫列表: ", animations)
+		return false
 
 func add_animation(root: Node, anim_name: String, loop: bool, delay: float, mix_duration: float = 0.1, time_scale: float = 1.0) -> bool:
 	var sprite = find_spine_node(root)

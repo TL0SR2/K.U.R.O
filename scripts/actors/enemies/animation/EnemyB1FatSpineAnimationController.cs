@@ -14,6 +14,7 @@ namespace Kuros.Actors.Enemies.Animation
         [Export] public string WalkAnimation = "walk";
         [Export] public string AttackAnimation = "attack";
         [Export] public string SkillAnimation = "skill_01";
+        [Export] public string Skill2Animation = "skill_02";
         [Export] public string HitAnimation = "hit";
         [Export] public string DieAnimation = "death";
         [Export(PropertyHint.Range, "0,1,0.01")] public float MixDuration = 0.15f;

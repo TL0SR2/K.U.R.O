@@ -288,8 +288,8 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			if (Enemy.PlayerTarget != null)
 			{
-				float targetX = Enemy.PlayerTarget.GlobalPosition.X;
-				recordedTarget = new Vector2(targetX, dashStart.Y);
+				// Snapshot player position only once at dash start; no realtime retargeting during dash.
+				recordedTarget = Enemy.PlayerTarget.GlobalPosition;
 			}
 			else
 			{
@@ -359,10 +359,10 @@ namespace Kuros.Actors.Enemies.Attacks
         {
             if (_grabArea != null)
             {
-                return _grabArea.OverlapsBody(player);
+				return player.IsHitByArea(_grabArea);
             }
 
-            return AttackArea != null && AttackArea.OverlapsBody(player);
+			return player.IsHitByArea(AttackArea);
         }
 
         private void ApplyFrozenState(SamplePlayer player)
