@@ -254,12 +254,13 @@ namespace Kuros.Controllers
             if (instance is Node2D node2D)
             {
                 node2D.GlobalPosition = spawnPosition;
-                ApplyNodeZIndex(node2D, spawnPosition, EnemyZOffset);
+                int baseZ = node2D.ZIndex;
+                ApplyNodeZIndex(node2D, spawnPosition, baseZ, EnemyZOffset);
                 node2D.Visible = true;
 
                 // Some enemy sub-controllers may toggle visibility/modulate in their own _Ready,
                 // so we re-apply visibility and z over a few frames for multi-spawn stability.
-                StabilizeSpawnedEnemyVisualAsync(node2D, spawnPosition);
+                StabilizeSpawnedEnemyVisualAsync(node2D, spawnPosition, baseZ);
             }
 
             EnsureSpawnedEnemyVisible(instance);
@@ -277,7 +278,7 @@ namespace Kuros.Controllers
             return instance;
         }
 
-        private async void StabilizeSpawnedEnemyVisualAsync(Node2D enemyNode2D, Vector2 spawnPosition)
+        private async void StabilizeSpawnedEnemyVisualAsync(Node2D enemyNode2D, Vector2 spawnPosition, int baseZ)
         {
             if (!GodotObject.IsInstanceValid(enemyNode2D))
             {
@@ -293,7 +294,7 @@ namespace Kuros.Controllers
                     return;
                 }
 
-                ApplyNodeZIndex(enemyNode2D, spawnPosition, EnemyZOffset);
+                ApplyNodeZIndex(enemyNode2D, spawnPosition, baseZ, EnemyZOffset);
                 EnsureSpawnedEnemyVisible(enemyNode2D);
             }
 
@@ -524,7 +525,8 @@ namespace Kuros.Controllers
             if (instance is Node2D node2D)
             {
                 node2D.GlobalPosition = spawnPosition;
-                ApplyNodeZIndex(node2D, spawnPosition, zOffset);
+                int baseZ = node2D.ZIndex;
+                ApplyNodeZIndex(node2D, spawnPosition, baseZ, zOffset);
                 node2D.Visible = true;
             }
 
@@ -758,10 +760,9 @@ namespace Kuros.Controllers
             public bool Finished;
         }
 
-        private void ApplyNodeZIndex(Node2D node2D, Vector2 worldPosition, int extraOffset)
+        private void ApplyNodeZIndex(Node2D node2D, Vector2 worldPosition, int baseZ, int extraOffset)
         {
-            int originalZ = node2D.ZIndex;
-            int resolvedZ = ResolveZIndex(worldPosition.Y, originalZ + extraOffset);
+            int resolvedZ = ResolveZIndex(worldPosition.Y, baseZ) + extraOffset;
             node2D.ZAsRelative = false;
             node2D.ZIndex = resolvedZ;
         }
