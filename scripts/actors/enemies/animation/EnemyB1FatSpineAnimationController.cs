@@ -46,6 +46,11 @@ namespace Kuros.Actors.Enemies.Animation
             ResolveAttackController();
         }
 
+        protected override float GetPreferredMixDuration()
+        {
+            return MixDuration;
+        }
+
         public override void _Process(double delta)
         {
             base._Process(delta);
