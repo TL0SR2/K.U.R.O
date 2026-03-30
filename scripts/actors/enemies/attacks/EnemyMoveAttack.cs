@@ -1,13 +1,15 @@
 using Godot;
+using Kuros.Actors.Enemies.States;
 using Kuros.Actors.Heroes.States;
 
 namespace Kuros.Actors.Enemies.Attacks
 {
     /// <summary>
-    /// 冲刺重击攻击：
+    /// 冲刺攻击（时间控制）：
 	/// 1. 玩家进入检测区域后触发预热；
-	/// 2. 预热结束直线冲刺至玩家先前位置；
-	/// 3. 冲刺结束若命中，造成伤害并施加不可挣脱的定时眩晕。
+	/// 2. 预热结束锁定方向后，持续冲刺 DashDuration 秒；
+	/// 3. 冲刺期间命中玩家即造成伤害 + 击退，冲刺本身不中断；
+	/// 4. 时间结束后进入 Recovery。
     /// </summary>
     public partial class EnemyMoveAttack : EnemyAttackTemplate
     {
@@ -17,36 +19,36 @@ namespace Kuros.Actors.Enemies.Attacks
 
         [ExportCategory("Dash")]
         [Export(PropertyHint.Range, "10,2000,10")] public float DashSpeed = 600f;
-		[Export(PropertyHint.Range, "0,2000,10")] public float DashDistance = 0f;
+		[Export(PropertyHint.Range, "0.05,10,0.05")] public float DashDuration = 0.5f; // 冲刺持续时间（秒）
         [Export] public bool LockFacingDuringDash = true;
-		[Export(PropertyHint.Range, "0,500,1")] public float MinDashDistanceBeforeSmash = 24f;
+		[Export(PropertyHint.Range, "0,5,0.01")] public float MinDashTimeBeforeAttack = 0f; // 允许命中前的最短冲刺时间（秒）
 		[Export(PropertyHint.Range, "0,5,0.1")] public float SnapshotDelaySeconds = 0f; // 冲刺前等待一段时间再记录玩家位置
-		[Export(PropertyHint.Range, "0,9999,1")] public int SmashDmg = 25;
+		[Export(PropertyHint.Range, "0,9999,1")] public int MoveAttackDmg = 25;
 
         [ExportCategory("Effects")]
-		[Export(PropertyHint.Range, "0,10,0.1")] public float AppliedStunDuration = 5.0f;
 		[Export] public StringName CooldownStateName = "CooldownFrozen";
+		[Export(PropertyHint.Range, "0,10,0.1")] public float DashEndSelfFrozenDuration = 3f;
+		[Export(PropertyHint.Range, "0,2000,1")] public float MoveAttackKnockbackDistance = 180f;
+		[Export(PropertyHint.Range, "0.01,2,0.01")] public float MoveAttackKnockbackDuration = 0.18f;
+		[Export(PropertyHint.Range, "0,6000,1")] public float MoveAttackKnockbackSpeed = 0f;
 
-		private const float MinDashDistance = 32f;
 		private const float PostCooldownDuration = 1.0f;
 
         private Area2D? _detectionArea;
-		private Area2D? _smashArea;
+		private Area2D? _moveArea;
         private EnemyAttackController? _controller;
 		private bool _playerInsideDetection;
 
         private Vector2 _dashDirection = Vector2.Right;
-		private Vector2 _dashTarget;
 		private bool _isDashing;
 		private bool _dashFinalized;
-		private bool _skipRecoverySmash;
 		private float _postAttackCooldown;
 		private bool _pendingCooldownExit;
-        private Vector2 _dashPreviousPosition;
-        private float _dashDistanceTraveled;
-		private bool _canAttemptSmash;
+		private float _dashTimeElapsed;
+		private bool _canAttemptMoveAttack;
 		private float _snapshotTimer = 0f;
 		private bool _waitingForSnapshot = false;
+		private bool _pendingSelfFrozenAfterDash;
 
 		public bool IsDashing => _isDashing;
 		public bool IsDashFinished => _dashFinalized;
@@ -68,10 +70,10 @@ namespace Kuros.Actors.Enemies.Attacks
 				GD.PushWarning($"[EnemySmashAttack] DetectionArea not found for {Enemy?.Name ?? Name}, fallback to DetectionRange.");
             }
 
-	            _smashArea = ResolveArea(MoveAttackAreaPath);
-	            if (_smashArea == null)
+	            _moveArea = ResolveArea(MoveAttackAreaPath);
+	            if (_moveArea == null)
             {
-	                _smashArea = AttackArea;
+	                _moveArea = AttackArea;
             }
 
 			SetPhysicsProcess(true);
@@ -123,12 +125,11 @@ namespace Kuros.Actors.Enemies.Attacks
 			base.OnAttackStarted();
 			_isDashing = false;
 			_dashFinalized = false;
-			_skipRecoverySmash = false;
 			_postAttackCooldown = 0f;
 			_pendingCooldownExit = false;
-			_dashPreviousPosition = Enemy?.GlobalPosition ?? Vector2.Zero;
-			_dashDistanceTraveled = 0f;
-			_canAttemptSmash = MinDashDistanceBeforeSmash <= 0f;
+			_dashTimeElapsed = 0f;
+			_canAttemptMoveAttack = MinDashTimeBeforeAttack <= 0f;
+			_pendingSelfFrozenAfterDash = false;
 			PrepareDashTowardsPlayer();
 		}
 
@@ -158,39 +159,27 @@ namespace Kuros.Actors.Enemies.Attacks
 			if (Enemy == null) return;
 			_isDashing = true;
 			Enemy.Velocity = _dashDirection * DashSpeed;
+
+			// 启用动画事件触发时，开放命中窗口供 TriggerAnimationHit 调用
+			if (RequireAnimationHitTrigger)
+			{
+				_animationHitReady = true;
+			}
         }
 
         protected override void OnRecoveryStarted()
         {
             base.OnRecoveryStarted();
+			if (_isDashing && DashEndSelfFrozenDuration > 0f)
+			{
+				_pendingSelfFrozenAfterDash = true;
+			}
 			_playerInsideDetection = false;
+			_isDashing = false;
+			_dashFinalized = true;
 			if (Enemy != null)
 			{
 				Enemy.Velocity = Vector2.Zero;
-			}
-
-			if (_skipRecoverySmash)
-			{
-				_skipRecoverySmash = false;
-				return;
-			}
-
-			if (!_dashFinalized)
-			{
-				FinishDash();
-			}
-
-			if (!_canAttemptSmash)
-			{
-				//StartPostCooldown();
-				_pendingCooldownExit = true;
-				return;
-			}
-
-			if (!TryExecuteSmash())
-			{
-				//StartPostCooldown();
-				_pendingCooldownExit = true;
 			}
 		}
 
@@ -253,20 +242,18 @@ namespace Kuros.Actors.Enemies.Attacks
             if (Enemy == null) return;
 
 			Vector2 dashStart = Enemy.GlobalPosition;
-			Vector2 recordedTarget;
+			Vector2 direction;
 
 			if (Enemy.PlayerTarget != null)
 			{
-				// Snapshot player position only once at dash start; no realtime retargeting during dash.
-				recordedTarget = Enemy.PlayerTarget.GlobalPosition;
+				// 快照玩家位置方向，冲刺期间不实时追踪。
+				direction = Enemy.PlayerTarget.GlobalPosition - dashStart;
 			}
 			else
-			{	
-				// 没有玩家目标时朝当前朝向的方向冲刺一个固定距离，避免原地。
-				recordedTarget = dashStart + (Enemy.FacingRight ? Vector2.Right : Vector2.Left) * MinDashDistance;
+			{
+				direction = Enemy.FacingRight ? Vector2.Right : Vector2.Left;
 			}
 
-			Vector2 direction = recordedTarget - dashStart;
 			if (direction == Vector2.Zero)
 			{
 				direction = Enemy.FacingRight ? Vector2.Right : Vector2.Left;
@@ -274,32 +261,17 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			_dashDirection = direction.Normalized();
 
-			float distanceToRecorded = direction.Length();
-			float targetDistance = distanceToRecorded;
-
-			if (DashDistance > 0)
-			{
-				targetDistance = Mathf.Min(distanceToRecorded, DashDistance);
-			}
-
-			if (targetDistance < MinDashDistance)
-			{
-				targetDistance = MinDashDistance;
-			}
-
-			_dashTarget = dashStart + _dashDirection * targetDistance;
-
             if (LockFacingDuringDash && _dashDirection.X != 0)
             {
                 Enemy.FlipFacing(_dashDirection.X > 0);
             }
 
-			float dashTime = Mathf.Max(targetDistance / Mathf.Max(DashSpeed, 1f), 0.05f);
-            ActiveDuration = dashTime;
+			// 使用时间控制冲刺持续长度
+            ActiveDuration = Mathf.Max(DashDuration, 0.05f);
 			RecoveryDuration = 1.0f;
         }
 
-		private bool TryExecuteSmash()
+		private bool TryExecuteMoveAttack()
         {
 			if (Enemy == null) return false;
 
@@ -309,49 +281,87 @@ namespace Kuros.Actors.Enemies.Attacks
 				return false;
 			}
 
-	            if (!IsPlayerInsideSmashZone(player))
+	            if (!IsPlayerInsideMoveAttackZone(player))
             {
 				_playerInsideDetection = false;
 				return false;
             }
 
-			// 成功命中：伤害 + 不可挣脱定时眩晕。
-			ApplySmashDamage(player);
-	            ApplyStunState(player);
+			// 成功命中：伤害 + 击退。
+			ApplyMoveAttackDamage(player);
+	            ApplyMoveAttackKnockback(player);
 			_playerInsideDetection = false;
 
 			// 命中后先保持当前攻击流程，避免动画被立即切到冷却状态。
 			return true;
         }
 
-		private bool IsPlayerInsideSmashZone(SamplePlayer player)
+		private bool IsPlayerInsideMoveAttackZone(SamplePlayer player)
         {
-	            if (_smashArea != null)
+	            if (_moveArea != null)
             {
-				return player.IsHitByArea(_smashArea);
+				return player.IsHitByArea(_moveArea);
             }
 
 			return player.IsHitByArea(AttackArea);
         }
 
-		private void ApplySmashDamage(SamplePlayer player)
+		private void ApplyMoveAttackDamage(SamplePlayer player)
 		{
 			if (Enemy == null) return;
 
-			int damage = Mathf.Max(1, SmashDmg);
+			int damage = Mathf.Max(1, MoveAttackDmg);
 			player.TakeDamage(damage, Enemy.GlobalPosition, Enemy);
 		}
 
-	        private void ApplyStunState(SamplePlayer player)
-        {
-            var frozenState = player.StateMachine?.GetNodeOrNull<PlayerFrozenState>("Frozen");
-            if (frozenState != null)
-            {
-	                // Smash 为定时眩晕，不走可挣脱流程。
-	                frozenState.FrozenDuration = AppliedStunDuration;
-				player.StateMachine?.ChangeState("Frozen");
+		private void ApplyMoveAttackKnockback(SamplePlayer player)
+		{
+			if (Enemy == null) return;
+
+			float duration = Mathf.Max(MoveAttackKnockbackDuration, 0.01f);
+			float distance = Mathf.Max(0f, MoveAttackKnockbackDistance);
+			float configuredSpeed = Mathf.Max(0f, MoveAttackKnockbackSpeed);
+			if (distance <= 0f && configuredSpeed <= 0f)
+			{
+				return;
 			}
-        }
+
+			float speed = configuredSpeed > 0f ? configuredSpeed : distance / duration;
+			if (speed <= 0f)
+			{
+				return;
+			}
+
+			Vector2 direction = player.GlobalPosition - Enemy.GlobalPosition;
+			if (direction == Vector2.Zero)
+			{
+				direction = _dashDirection;
+			}
+
+			player.Velocity = direction.Normalized() * speed;
+			ApplyFrozenExternalDisplacement(player, player.Velocity, duration);
+		}
+
+		private static void ApplyFrozenExternalDisplacement(SamplePlayer player, Vector2 velocity, float duration)
+		{
+			var frozenState = player.StateMachine?.GetNodeOrNull<PlayerFrozenState>("Frozen");
+			if (frozenState == null)
+			{
+				return;
+			}
+
+			if (player.StateMachine?.CurrentState != frozenState)
+			{
+				return;
+			}
+
+			if (!frozenState.AllowExternalDisplacementWhileFrozen)
+			{
+				return;
+			}
+
+			frozenState.ApplyExternalDisplacement(velocity, duration);
+		}
 
 		private void StartPostCooldown()
         {
@@ -447,76 +457,50 @@ namespace Kuros.Actors.Enemies.Attacks
 		{
 			if (!_isDashing || Enemy == null) return;
 
-			UpdateDashTravelProgress();
-
-			if (_canAttemptSmash && Enemy.PlayerTarget != null && IsPlayerInsideSmashZone(Enemy.PlayerTarget))
+			// 最短冲刺时间计时
+			if (!_canAttemptMoveAttack)
 			{
-				FinishDash(forceGrab: true);
-				return;
+				_dashTimeElapsed += (float)delta;
+				if (_dashTimeElapsed >= MinDashTimeBeforeAttack)
+				{
+					_canAttemptMoveAttack = true;
+				}
 			}
 
-			Vector2 toTarget = _dashTarget - Enemy.GlobalPosition;
-			float projected = toTarget.Dot(_dashDirection);
-
-			if (projected <= 0f)
+			// 命中检测：不中断冲刺，重叠期间可持续触发（启用动画事件触发时跳过此处）
+			if (!RequireAnimationHitTrigger && _canAttemptMoveAttack && Enemy.PlayerTarget != null && IsPlayerInsideMoveAttackZone(Enemy.PlayerTarget))
 			{
-				FinishDash();
-				return;
+				ApplyMoveAttackDamage(Enemy.PlayerTarget);
+				ApplyMoveAttackKnockback(Enemy.PlayerTarget);
 			}
 
-			float maxStep = DashSpeed * (float)delta;
-			if (toTarget.LengthSquared() <= maxStep * maxStep)
+			// 实时追踪玩家位置更新冲刺方向
+			if (Enemy.PlayerTarget != null)
 			{
-				FinishDash();
-				return;
+				Vector2 toPlayer = Enemy.PlayerTarget.GlobalPosition - Enemy.GlobalPosition;
+				if (toPlayer != Vector2.Zero)
+				{
+					_dashDirection = toPlayer.Normalized();
+					if (!LockFacingDuringDash && _dashDirection.X != 0)
+					{
+						Enemy.FlipFacing(_dashDirection.X > 0);
+					}
+				}
 			}
 
+			// 持续冲刺，直到 DashDuration 到期由基类切入 Recovery
 			Enemy.Velocity = _dashDirection * DashSpeed;
 		}
 
-		private void FinishDash(bool forceGrab = false)
+		protected override void OnAnimationHit()
 		{
-			if (Enemy == null) return;
+			if (Enemy?.PlayerTarget == null) return;
+			if (!_canAttemptMoveAttack) return;
 
-			_dashFinalized = true;
-
-			if (!forceGrab)
-        {
-				Enemy.GlobalPosition = _dashTarget;
-			}
-
-			Enemy.Velocity = Vector2.Zero;
-			_dashPreviousPosition = Enemy.GlobalPosition;
-			_isDashing = false;
-			if (forceGrab)
+			if (IsPlayerInsideMoveAttackZone(Enemy.PlayerTarget))
 			{
-				_skipRecoverySmash = true;
-				ForceEnterRecoveryPhase();
-				_canAttemptSmash = true;
-				if (!TryExecuteSmash())
-				{
-					//StartPostCooldown();
-					FinishCooldownState();
-				}
-				return;
-			}
-
-			ForceEnterRecoveryPhase();
-        }
-
-		private void UpdateDashTravelProgress()
-		{
-			if (Enemy == null) return;
-			Vector2 currentPosition = Enemy.GlobalPosition;
-			float moved = (_dashPreviousPosition - currentPosition).Length();
-			if (moved > 0f)
-			{
-				_dashDistanceTraveled += moved;
-				_dashPreviousPosition = currentPosition;
-				if (!_canAttemptSmash && _dashDistanceTraveled >= MinDashDistanceBeforeSmash)
-				{
-					_canAttemptSmash = true;
-				}
+				ApplyMoveAttackDamage(Enemy.PlayerTarget);
+				ApplyMoveAttackKnockback(Enemy.PlayerTarget);
 			}
 		}
 
@@ -550,11 +534,33 @@ namespace Kuros.Actors.Enemies.Attacks
 		{
 			base.OnAttackFinished();
 			_playerInsideDetection = false;
+			if (_pendingSelfFrozenAfterDash)
+			{
+				_pendingSelfFrozenAfterDash = false;
+				if (TryEnterSelfFrozenState())
+				{
+					return;
+				}
+			}
 			if (_postAttackCooldown <= 0f)
 			{
 				StartPostCooldown();
 			}
-			_skipRecoverySmash = false;
     }
+
+		private bool TryEnterSelfFrozenState()
+		{
+			if (Enemy?.StateMachine == null) return false;
+
+			var frozenState = Enemy.StateMachine.GetNodeOrNull<EnemyFrozenState>("Frozen");
+			if (frozenState == null)
+			{
+				return false;
+			}
+
+			frozenState.FrozenDuration = Mathf.Max(DashEndSelfFrozenDuration, 0.1f);
+			Enemy.StateMachine.ChangeState("Frozen");
+			return true;
+		}
 }
 }

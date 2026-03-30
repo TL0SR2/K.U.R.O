@@ -131,17 +131,16 @@ shape = SubResource("RectangleShape2D_k0qph")
 script = ExtResource("7_k0qph")
 
 [node name="Enemy_B1_fat" parent="World" instance=ExtResource("6_ctuyy")]
-position = Vector2(9530, 218)
-MaxHealth = 100
-
-[node name="Enemy_Normal_guard1" parent="World" instance=ExtResource("8_vvtmr")]
-position = Vector2(3901, 81)
+position = Vector2(10450, 266)
 
 [node name="Enemy_B2_fat02" parent="World" instance=ExtResource("10_f0l3g")]
-position = Vector2(1625, 1392)
+position = Vector2(373, 1234)
+
+[node name="Enemy_Normal_guard1" parent="World" instance=ExtResource("8_vvtmr")]
+position = Vector2(729, 81)
 
 [node name="Enemy_Normal_guard2" parent="World" instance=ExtResource("10_x3vg8")]
-position = Vector2(276, -110)
+position = Vector2(3954, 228)
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
 visible = false

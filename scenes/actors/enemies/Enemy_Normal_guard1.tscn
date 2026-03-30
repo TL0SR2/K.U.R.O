@@ -27,7 +27,7 @@ shader_parameter/softness = 0.5
 shader_parameter/alpha = 0.4
 
 [sub_resource type="RectangleShape2D" id="2"]
-size = Vector2(220, 170)
+size = Vector2(189, 170)
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_gvrrx"]
 radius = 1024.0
@@ -52,6 +52,7 @@ y_sort_enabled = true
 collision_layer = 2
 motion_mode = 1
 script = ExtResource("1_75dbm")
+SimpleAttackWarmupSeconds = 0.4
 EnableStateDebugOverlay = true
 DebugOverlayOffset = Vector2(-300, 50)
 DebugOverlayFontSize = 32
@@ -82,7 +83,7 @@ collision_layer = 0
 monitorable = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Sprite2D/AttackArea"]
-position = Vector2(180, 0)
+position = Vector2(164.5, 0)
 shape = SubResource("2")
 
 [node name="AttackDetectionArea" type="Area2D" parent="Sprite2D"]
@@ -134,28 +135,33 @@ script = ExtResource("9_h8efu")
 
 [node name="AttackController" type="Node" parent="StateMachine/Attack"]
 script = ExtResource("9_75dbm")
-MeleeCountBeforeCharge = 1
+MeleeCountBeforeCharge = 5
 PlayerDetectionAreaPath = NodePath("../../../Sprite2D/ControllerDetectionArea")
 
 [node name="OnePunchAttack" type="Node" parent="StateMachine/Attack/AttackController"]
 script = ExtResource("10_75dbm")
 DetectionAreaPath = NodePath("../../../../Sprite2D/AttackDetectionArea")
 OnePunchAttackAreaPath = NodePath("../../../../Sprite2D/OnePunchAttackArea")
-DashSpeed = 1500.0
+DashSpeed = 2000.0
 DashDistance = 1500.0
 MinDashDistanceBeforeSmash = 0.0
 SnapshotDelaySeconds = 1.0
 OnePunchKnockbackDistance = 500.0
 OnePunchKnockbackDuration = 0.1
+OnePunchKnockbackSpeed = 6000.0
 WarmupDuration = 1.0
 ActiveDuration = 0.5
 RecoveryDuration = 0.47
+EnableSuperArmor = true
 metadata/attack_weight = 60.0
 
 [node name="SimpleMeleeAttack" type="Node" parent="StateMachine/Attack/AttackController"]
 script = ExtResource("12_yoq8a")
 AttackIntervalSeconds = 0.1
 Damage = 1
+SimpleMeleeAttackKnockbackDistance = 50.0
+SimpleMeleeAttackKnockbackDuration = 0.1
+SimpleMeleeAttackKnockbackSpeed = 1500.0
 WarmupDuration = 0.33
 ActiveDuration = 0.2
 RecoveryDuration = 0.47
@@ -185,9 +191,9 @@ script = ExtResource("18_u8fiq")
 scale = Vector2(0.33, 0.33)
 skeleton_data_res = ExtResource("17_s72su")
 preview_skin = "Default"
-preview_animation = "hit"
+preview_animation = "-- Empty --"
 preview_frame = true
-preview_time = 0.33
+preview_time = 0.4
 
 [node name="AnimationController" type="Node" parent="."]
 script = ExtResource("19_lxpom")
@@ -195,4 +201,5 @@ IdleMixDuration = 0.01
 WalkMixDuration = 0.01
 HitMixDuration = 0.01
 DieMixDuration = 0.03
-AttackMixDuration = 0.01
+AttackMixDuration = 0.15
+SkillMixDuration = 0.25

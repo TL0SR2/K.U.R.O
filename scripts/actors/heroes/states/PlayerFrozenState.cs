@@ -11,6 +11,7 @@ namespace Kuros.Actors.Heroes.States
         public float FrozenDuration = 2.0f;
         public float FrozenAnimationSpeed = 1.0f;
         [Export] public string SpineFrozenAnimationName = "stun";
+        [Export] public bool AllowExternalDisplacementWhileFrozen = true;
 
         private float _timer;
         private bool _externallyHeld;
@@ -18,6 +19,8 @@ namespace Kuros.Actors.Heroes.States
         private MainCharacter? _mainCharacter;
         private bool _spineAnimationApplied;
         private bool _allowTransitionOut;
+        private Vector2 _externalDisplacementVelocity = Vector2.Zero;
+        private float _externalDisplacementTimer;
 
         public bool IsExternallyHeld => _externallyHeld;
         public float RemainingHoldRatio
@@ -37,6 +40,8 @@ namespace Kuros.Actors.Heroes.States
             _timer = FrozenDuration;
             _externallyHeld = false;
             _allowTransitionOut = false; // 初始时不允许转换到其他状态。
+            _externalDisplacementVelocity = Vector2.Zero;
+            _externalDisplacementTimer = 0f;
             Actor.Velocity = Vector2.Zero;
             _mainCharacter = Actor as MainCharacter;
             _spineAnimationApplied = false;
@@ -82,7 +87,23 @@ namespace Kuros.Actors.Heroes.States
 
         public override void PhysicsUpdate(double delta)
         {
-            Actor.Velocity = Vector2.Zero;
+            if (AllowExternalDisplacementWhileFrozen && _externalDisplacementTimer > 0f)
+            {
+                _externalDisplacementTimer -= (float)delta;
+                Actor.Velocity = _externalDisplacementVelocity;
+
+                if (_externalDisplacementTimer <= 0f)
+                {
+                    _externalDisplacementTimer = 0f;
+                    _externalDisplacementVelocity = Vector2.Zero;
+                    Actor.Velocity = Vector2.Zero;
+                }
+            }
+            else
+            {
+                Actor.Velocity = Vector2.Zero;
+            }
+
             Actor.MoveAndSlide();
 
             if (_externallyHeld)
@@ -126,6 +147,23 @@ namespace Kuros.Actors.Heroes.States
 			_timer = 0f;
 			_allowTransitionOut = true;
 			ChangeState("Idle");
+        }
+
+        public void ApplyExternalDisplacement(Vector2 velocity, float duration)
+        {
+            if (!AllowExternalDisplacementWhileFrozen)
+            {
+                return;
+            }
+
+            float clampedDuration = Mathf.Max(duration, 0f);
+            if (clampedDuration <= 0f || velocity == Vector2.Zero)
+            {
+                return;
+            }
+
+            _externalDisplacementVelocity = velocity;
+            _externalDisplacementTimer = Mathf.Max(_externalDisplacementTimer, clampedDuration);
         }
     }
 }

@@ -23,6 +23,9 @@ namespace Kuros.Actors.Enemies.Animation
         private float _activeLoopStart;
         private float _activeLoopEnd;
         private EnemySmashAttack? _skillChargeSmashAttack;
+        private Node? _spineControllerNode;
+        private Callable _spineHitCallable;
+        private bool _spineHitSubscribed;
 
         public override void _Ready()
         {
@@ -34,10 +37,17 @@ namespace Kuros.Actors.Enemies.Animation
             base._Ready();
         }
 
+        public override void _ExitTree()
+        {
+            UnsubscribeSpineHitSignal();
+            base._ExitTree();
+        }
+
         protected override void OnControllerReady()
         {
             base.OnControllerReady();
             ResolveAttackController();
+            EnsureSpineHitSupport();
         }
 
         protected override float GetPreferredMixDuration()
@@ -218,6 +228,111 @@ namespace Kuros.Actors.Enemies.Animation
 
             _skillChargeSmashAttack = controller.GetNodeOrNull<EnemySmashAttack>(controller.SkillAttackName);
             return _skillChargeSmashAttack;
+        }
+
+        private void EnsureSpineHitSupport()
+        {
+            if (_spineHitSubscribed)
+            {
+                return;
+            }
+
+            if (SpineSpritePath.IsEmpty)
+            {
+                return;
+            }
+
+            _spineControllerNode = GetNodeOrNull(SpineSpritePath) ?? Enemy?.GetNodeOrNull(SpineSpritePath);
+            if (_spineControllerNode == null || !_spineControllerNode.HasSignal("hit_received"))
+            {
+                _spineControllerNode = null;
+                return;
+            }
+
+            _spineHitCallable = Callable.From<int, string>(OnSpineHitReceived);
+            _spineControllerNode.Connect("hit_received", _spineHitCallable);
+            _spineHitSubscribed = true;
+        }
+
+        private void UnsubscribeSpineHitSignal()
+        {
+            if (!_spineHitSubscribed || _spineControllerNode == null)
+            {
+                _spineHitSubscribed = false;
+                _spineControllerNode = null;
+                return;
+            }
+
+            if (_spineControllerNode.IsConnected("hit_received", _spineHitCallable))
+            {
+                _spineControllerNode.Disconnect("hit_received", _spineHitCallable);
+            }
+
+            _spineHitSubscribed = false;
+            _spineControllerNode = null;
+        }
+
+        private void OnSpineHitReceived(int hitStep, string animationName)
+        {
+            if (Enemy?.StateMachine?.CurrentState?.Name != "Attack")
+            {
+                return;
+            }
+
+            var controller = ResolveAttackController();
+            if (controller == null || string.IsNullOrEmpty(controller.CurrentAttackName))
+            {
+                return;
+            }
+
+            EnemyAttackTemplate? currentAttack = controller.GetNodeOrNull<EnemyAttackTemplate>(controller.CurrentAttackName);
+            if (currentAttack == null || !currentAttack.IsRunning)
+            {
+                return;
+            }
+
+            if (!IsExpectedHitAnimation(controller, animationName))
+            {
+                return;
+            }
+
+            if (currentAttack is EnemySimpleMeleeAttack simpleMelee && simpleMelee.RequireAnimationHitTrigger)
+            {
+                float originalDamage = Enemy != null ? Enemy.AttackDamage : 0f;
+                if (Enemy != null) Enemy.AttackDamage = simpleMelee.Damage;
+                currentAttack.TriggerAnimationHit();
+                if (Enemy != null) Enemy.AttackDamage = originalDamage;
+                return;
+            }
+
+            currentAttack.TriggerAnimationHit();
+        }
+
+        private bool IsExpectedHitAnimation(EnemyB2Fat02AttackController controller, string animationName)
+        {
+            string expectedAnimation = string.Empty;
+            if (controller.CurrentAttackName.Equals(controller.MeleeAttackName, _comparison))
+            {
+                expectedAnimation = AttackAnimation;
+            }
+            else if (controller.CurrentAttackName.Equals(controller.SkillAttackName, _comparison))
+            {
+                expectedAnimation = SkillAnimation;
+            }
+
+            if (string.IsNullOrEmpty(expectedAnimation))
+            {
+                return true;
+            }
+
+            if (string.Equals(animationName, expectedAnimation, _comparison))
+            {
+                return true;
+            }
+
+            // 兼容 Spine 动画命名带后缀/前缀（如 skill_1 / skill-loop）的情况
+            return animationName.Contains(expectedAnimation, _comparison)
+                || expectedAnimation.Contains(animationName, _comparison);
         }
 
     }

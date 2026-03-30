@@ -1,4 +1,5 @@
 ﻿using Godot;
+using Kuros.Actors.Heroes.States;
 
 namespace Kuros.Actors.Enemies.Attacks
 {
@@ -25,6 +26,7 @@ namespace Kuros.Actors.Enemies.Attacks
         [ExportCategory("Effects")]
 		[Export(PropertyHint.Range, "0,2000,1")] public float OnePunchKnockbackDistance = 180f;
 		[Export(PropertyHint.Range, "0.01,2,0.01")] public float OnePunchKnockbackDuration = 0.18f;
+		[Export(PropertyHint.Range, "0,6000,1")] public float OnePunchKnockbackSpeed = 0f;
 		[Export] public StringName CooldownStateName = "CooldownFrozen";
 
 		private const float MinDashDistance = 32f;
@@ -350,7 +352,17 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			float duration = Mathf.Max(OnePunchKnockbackDuration, 0.01f);
 			float distance = Mathf.Max(0f, OnePunchKnockbackDistance);
-			float speed = distance / duration;
+			float configuredSpeed = Mathf.Max(0f, OnePunchKnockbackSpeed);
+			if (distance <= 0f && configuredSpeed <= 0f)
+			{
+				return;
+			}
+
+			float speed = configuredSpeed > 0f ? configuredSpeed : distance / duration;
+			if (speed <= 0f)
+			{
+				return;
+			}
 
 			Vector2 direction = player.GlobalPosition - Enemy.GlobalPosition;
 			if (direction == Vector2.Zero)
@@ -359,6 +371,28 @@ namespace Kuros.Actors.Enemies.Attacks
 			}
 
 			player.Velocity = direction.Normalized() * speed;
+			ApplyFrozenExternalDisplacement(player, player.Velocity, duration);
+		}
+
+		private static void ApplyFrozenExternalDisplacement(SamplePlayer player, Vector2 velocity, float duration)
+		{
+			var frozenState = player.StateMachine?.GetNodeOrNull<PlayerFrozenState>("Frozen");
+			if (frozenState == null)
+			{
+				return;
+			}
+
+			if (player.StateMachine?.CurrentState != frozenState)
+			{
+				return;
+			}
+
+			if (!frozenState.AllowExternalDisplacementWhileFrozen)
+			{
+				return;
+			}
+
+			frozenState.ApplyExternalDisplacement(velocity, duration);
 		}
 
 		private void StartPostCooldown()

@@ -15,12 +15,8 @@ namespace Kuros.Actors.Enemies.Animation
         [Export] public string AttackAnimation = "attack";
         [Export] public string SkillAnimation = "skill";
         [Export] public string HitAnimation = "hit";
-        [Export] public string FrozenAnimation = "hit";
+        [Export] public string StunAnimation = "stun";
         [Export] public string DieAnimation = "death";
-        [Export(PropertyHint.Range, "0,5,0.01")] public float SkillLoopStart = 1.49f;
-        [Export(PropertyHint.Range, "0,5,0.01")] public float SkillLoopEnd = 1.5f;
-        [Export(PropertyHint.Range, "0,5,0.01")] public float SkillPartStart = 1.51f;
-        [Export(PropertyHint.Range, "0,5,0.01")] public float SkillPartEnd = 1.97f;
         private EnemyNormalGuard2AttackController? _attackController;
         private string _currentKey = string.Empty;
         private SpineAnimationPlaybackMode _currentMode = SpineAnimationPlaybackMode.Loop;
@@ -28,6 +24,9 @@ namespace Kuros.Actors.Enemies.Animation
         private float _activeLoopStart;
         private float _activeLoopEnd;
         private EnemyMoveAttack? _skillChargeMoveAttack;
+        private Node? _spineControllerNode;
+        private Callable _spineHitCallable;
+        private bool _spineHitSubscribed;
 
         public override void _Ready()
         {
@@ -39,10 +38,17 @@ namespace Kuros.Actors.Enemies.Animation
             base._Ready();
         }
 
+        public override void _ExitTree()
+        {
+            UnsubscribeSpineHitSignal();
+            base._ExitTree();
+        }
+
         protected override void OnControllerReady()
         {
             base.OnControllerReady();
             ResolveAttackController();
+            EnsureSpineHitSupport();
         }
 
         protected override float GetPreferredMixDuration()
@@ -74,11 +80,11 @@ namespace Kuros.Actors.Enemies.Animation
                 case "Hit":
                     PlayOnceIfNeeded("Hit", HitAnimation, HitMixDuration);
                     break;
-                case "Frozen":
-                    PlayLoopIfNeeded("Frozen", FrozenAnimation, HitMixDuration);
-                    break;
                 case "Dying":
                     PlayOnceIfNeeded("Die", DieAnimation, DieMixDuration, enqueueIdle: false);
+                    break;
+                case "Frozen":
+                    PlayLoopIfNeeded("Stun", StunAnimation, HitMixDuration);
                     break;
                 case "Dead":
                     PlayEmptyIfNeeded();
@@ -116,15 +122,16 @@ namespace Kuros.Actors.Enemies.Animation
 
                     if (skillAttack != null && !skillAttack.IsDashFinished)
                     {
-                        PlayPartLoopIfNeeded("Skill", SkillAnimation, SkillLoopStart, SkillLoopEnd, SkillMixDuration);
+                        PlayLoopIfNeeded("Skill", SkillAnimation, SkillMixDuration);
                         return;
                     }
 
-                    if (skillAttack != null && skillAttack.IsDashFinished)
-                    {
-                        PlayPartOnceIfNeeded("SkillPartOnce", SkillAnimation, SkillPartStart, SkillPartEnd, SkillMixDuration);
-                        return;
-                    }
+					// Dash 结束后若会立即进入 Frozen，先保持 stun 动画，避免出现一帧 idle 闪烁。
+					if (skillAttack != null && skillAttack.IsDashFinished && skillAttack.DashEndSelfFrozenDuration > 0f)
+					{
+						PlayLoopIfNeeded("Stun", StunAnimation, HitMixDuration);
+						return;
+					}
                 }
             }
 
@@ -301,6 +308,104 @@ namespace Kuros.Actors.Enemies.Animation
 
             _skillChargeMoveAttack = controller.GetNodeOrNull<EnemyMoveAttack>(controller.SkillAttackName);
             return _skillChargeMoveAttack;
+        }
+
+        private void EnsureSpineHitSupport()
+        {
+            if (_spineHitSubscribed)
+            {
+                return;
+            }
+
+            if (SpineSpritePath.IsEmpty)
+            {
+                return;
+            }
+
+            _spineControllerNode = GetNodeOrNull(SpineSpritePath) ?? Enemy?.GetNodeOrNull(SpineSpritePath);
+            if (_spineControllerNode == null || !_spineControllerNode.HasSignal("hit_received"))
+            {
+                _spineControllerNode = null;
+                return;
+            }
+
+            _spineHitCallable = Callable.From<int, string>(OnSpineHitReceived);
+            _spineControllerNode.Connect("hit_received", _spineHitCallable);
+            _spineHitSubscribed = true;
+        }
+
+        private void UnsubscribeSpineHitSignal()
+        {
+            if (!_spineHitSubscribed || _spineControllerNode == null)
+            {
+                _spineHitSubscribed = false;
+                _spineControllerNode = null;
+                return;
+            }
+
+            if (_spineControllerNode.IsConnected("hit_received", _spineHitCallable))
+            {
+                _spineControllerNode.Disconnect("hit_received", _spineHitCallable);
+            }
+
+            _spineHitSubscribed = false;
+            _spineControllerNode = null;
+        }
+
+        private void OnSpineHitReceived(int hitStep, string animationName)
+        {
+            if (Enemy?.StateMachine?.CurrentState?.Name != "Attack")
+            {
+                return;
+            }
+
+            var controller = ResolveAttackController();
+            if (controller == null || string.IsNullOrEmpty(controller.CurrentAttackName))
+            {
+                return;
+            }
+
+            EnemyAttackTemplate? currentAttack = controller.GetNodeOrNull<EnemyAttackTemplate>(controller.CurrentAttackName);
+            if (currentAttack == null || !currentAttack.IsRunning)
+            {
+                return;
+            }
+
+            if (!IsExpectedHitAnimation(controller, animationName))
+            {
+                return;
+            }
+
+            if (currentAttack is EnemySimpleMeleeAttack simpleMelee && simpleMelee.RequireAnimationHitTrigger)
+            {
+                float originalDamage = Enemy != null ? Enemy.AttackDamage : 0f;
+                if (Enemy != null) Enemy.AttackDamage = simpleMelee.Damage;
+                currentAttack.TriggerAnimationHit();
+                if (Enemy != null) Enemy.AttackDamage = originalDamage;
+                return;
+            }
+
+            currentAttack.TriggerAnimationHit();
+        }
+
+        private bool IsExpectedHitAnimation(EnemyNormalGuard2AttackController controller, string animationName)
+        {
+            string expectedAnimation = string.Empty;
+            if (controller.CurrentAttackName.Equals(controller.MeleeAttackName, _comparison))
+            {
+                expectedAnimation = AttackAnimation;
+            }
+            else if (controller.CurrentAttackName.Equals(controller.SkillAttackName, _comparison))
+            {
+                expectedAnimation = SkillAnimation;
+            }
+
+            if (string.IsNullOrEmpty(expectedAnimation))
+            {
+                return true;
+            }
+
+            return string.Equals(animationName, expectedAnimation, _comparison);
         }
 
     }
