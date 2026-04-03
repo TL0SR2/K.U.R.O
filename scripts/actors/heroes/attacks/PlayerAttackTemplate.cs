@@ -176,6 +176,7 @@ namespace Kuros.Actors.Heroes.Attacks
             }
 
             OnTick(delta);
+            RefreshCurrentHitboxDebug();
         }
 
         protected virtual void OnTick(double delta) { }
@@ -404,10 +405,37 @@ namespace Kuros.Actors.Heroes.Attacks
                 return;
             }
 
-            ShowWeaponHitboxDebug(skill, collisionShape);
+            ShowWeaponHitboxDebug(skill, collisionShape, logOnce: true);
         }
 
-        private void ShowWeaponHitboxDebug(WeaponSkillDefinition skill, CollisionShape2D collisionShape)
+        private void RefreshCurrentHitboxDebug()
+        {
+            if (_phase == AttackPhase.Idle)
+            {
+                return;
+            }
+
+            if (_activeWeaponSkill == null || !_activeWeaponSkill.ShowHitboxDebug)
+            {
+                return;
+            }
+
+            Area2D? area = Player.ResolveAttackAreaForHitDetection();
+            if (area == null)
+            {
+                return;
+            }
+
+            var collisionShape = ResolveCollisionShape(area);
+            if (collisionShape == null || collisionShape.Shape == null)
+            {
+                return;
+            }
+
+            ShowWeaponHitboxDebug(_activeWeaponSkill, collisionShape, logOnce: false);
+        }
+
+        private void ShowWeaponHitboxDebug(WeaponSkillDefinition skill, CollisionShape2D collisionShape, bool logOnce)
         {
             if (!skill.ShowHitboxDebug)
             {
@@ -422,7 +450,10 @@ namespace Kuros.Actors.Heroes.Attacks
                 skill.HitboxDebugDuration
             );
 
-            GD.Print($"[{GetType().Name}] Hitbox Debug => Shape={collisionShape.Shape.GetType().Name}, Position={collisionShape.GlobalPosition}, Rotation={collisionShape.GlobalRotationDegrees}");
+            if (logOnce)
+            {
+                GD.Print($"[{GetType().Name}] Hitbox Debug => Shape={collisionShape.Shape.GetType().Name}, Position={collisionShape.GlobalPosition}, Rotation={collisionShape.GlobalRotationDegrees}");
+            }
         }
 
         private void EnsureHitboxDebugDrawer()

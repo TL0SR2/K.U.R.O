@@ -251,6 +251,22 @@ namespace Kuros.Actors.Heroes
             return shape != null;
         }
 
+        public bool TryGetAttackAnchorGlobalPosition(out Vector2 globalPosition)
+        {
+            var anchorNode = ResolveCurrentSlotAnchorNode() ?? ResolveActiveBoneNode();
+            if (anchorNode == null || !IsInstanceValid(anchorNode))
+            {
+                globalPosition = Vector2.Zero;
+                return false;
+            }
+
+            var anchorTransform = anchorNode.GetGlobalTransform();
+            globalPosition = RotateBoneOffsetWithBone
+                ? anchorTransform * BoneIconOffset
+                : anchorNode.GlobalPosition + BoneIconOffset;
+            return true;
+        }
+
         private void ShowOnSpineSlot(Texture2D? texture)
         {
             if (_spineSlotNode == null)

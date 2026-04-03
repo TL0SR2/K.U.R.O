@@ -17,6 +17,8 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	[Export] public Area2D AttackArea { get; private set; } = null!;
 	[Export] public Area2D? HitArea { get; private set; }
 	[Export] public bool SyncMainAttackAreaWithEquippedWeaponArea { get; set; } = true;
+	[Export] public bool FollowSyncedAttackAreaWithAttackBoneMotion { get; set; } = true;
+	[Export] public NodePath AttackMotionBonePath { get; set; } = new("SpineSprite/SpineBoneNode");
 	private CollisionShape2D? _attackCollisionShape;
 	private Area2D? _cachedAttackAreaOwner;
 	private CollisionShape2D? _mainAttackCollisionShape;
@@ -27,6 +29,9 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	private Vector2 _currentAttackShapeBasePosition;
 	private float _currentAttackShapeBaseRotation;
 	private Vector2 _currentAttackAreaBaseScale = Vector2.One;
+	private Vector2 _attackAnchorRestLocalPosition;
+	private Vector2 _currentAttackAnchorMotionOffset = Vector2.Zero;
+	private Node2D? _attackMotionBoneNode;
 	private PlayerItemAttachment? _itemAttachment;
 	private readonly Godot.Collections.Array<Rid> _attackQueryExclude = new();
 	public PlayerFrozenState? FrozenState { get; private set; }
@@ -118,6 +123,8 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 			}
 		}
 
+		ResolveAttackMotionBoneNode();
+
 		CacheMainAttackAreaDefaults();
 		CallDeferred(MethodName.OnEquippedAttackAreaChanged);
 		
@@ -130,6 +137,12 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		CallDeferred(MethodName.ApplyUnarmedSkillIfEmpty);
 		
 		UpdateStatsUI();
+	}
+
+	public override void _Process(double delta)
+	{
+		base._Process(delta);
+		UpdateSyncedAttackAreaAttackBoneMotion();
 	}
 
 	public override void _ExitTree()
@@ -178,6 +191,8 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		_currentAttackShapeBasePosition = _defaultAttackShapePosition;
 		_currentAttackShapeBaseRotation = _defaultAttackShapeRotation;
 		_currentAttackAreaBaseScale = AttackArea.Scale;
+		_attackAnchorRestLocalPosition = Vector2.Zero;
+		_currentAttackAnchorMotionOffset = Vector2.Zero;
 	}
 
 	private void OnEquippedAttackAreaChanged()
@@ -229,6 +244,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		AttackArea.Scale = _currentAttackAreaBaseScale;
 		_mainAttackCollisionShape.Scale = Vector2.One;
 		_mainAttackCollisionShape.Shape = syncedShape;
+		RefreshAttackAnchorTracking(resetOffset: true);
 		ApplyAttackAreaFacingTransform(FacingRight);
 	}
 
@@ -252,7 +268,101 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		_currentAttackAreaBaseScale = AttackArea != null
 			? new Vector2(Mathf.Abs(AttackArea.Scale.X), Mathf.Abs(AttackArea.Scale.Y))
 			: Vector2.One;
+		RefreshAttackAnchorTracking(resetOffset: true);
 		ApplyAttackAreaFacingTransform(FacingRight);
+	}
+
+	private void RefreshAttackAnchorTracking(bool resetOffset)
+	{
+		if (resetOffset)
+		{
+			_currentAttackAnchorMotionOffset = Vector2.Zero;
+		}
+
+		if (!TryGetCurrentAttackAnchorLocalPosition(out var localPosition))
+		{
+			_attackAnchorRestLocalPosition = Vector2.Zero;
+			return;
+		}
+
+		_attackAnchorRestLocalPosition = localPosition;
+	}
+
+	private void UpdateSyncedAttackAreaAttackBoneMotion()
+	{
+		if (!SyncMainAttackAreaWithEquippedWeaponArea || !FollowSyncedAttackAreaWithAttackBoneMotion)
+		{
+			return;
+		}
+
+		if (AttackArea == null || _mainAttackCollisionShape == null)
+		{
+			return;
+		}
+
+		if (!TryGetCurrentAttackAnchorLocalPosition(out var localPosition))
+		{
+			if (_currentAttackAnchorMotionOffset != Vector2.Zero)
+			{
+				_currentAttackAnchorMotionOffset = Vector2.Zero;
+				ApplyAttackAreaFacingTransform(FacingRight);
+			}
+			return;
+		}
+
+		Vector2 newOffset = localPosition - _attackAnchorRestLocalPosition;
+		if (newOffset.IsEqualApprox(_currentAttackAnchorMotionOffset))
+		{
+			return;
+		}
+
+		_currentAttackAnchorMotionOffset = newOffset;
+		ApplyAttackAreaFacingTransform(FacingRight);
+	}
+
+	private bool TryGetCurrentAttackAnchorLocalPosition(out Vector2 localPosition)
+	{
+		if (_itemAttachment != null && _itemAttachment.TryGetAttackAnchorGlobalPosition(out var globalPosition))
+		{
+			localPosition = ToLocal(globalPosition);
+			return true;
+		}
+
+		ResolveAttackMotionBoneNode();
+		if (_attackMotionBoneNode != null && IsInstanceValid(_attackMotionBoneNode))
+		{
+			localPosition = ToLocal(_attackMotionBoneNode.GlobalPosition);
+			return true;
+		}
+
+		localPosition = Vector2.Zero;
+		return false;
+	}
+
+	private void ResolveAttackMotionBoneNode()
+	{
+		if (_attackMotionBoneNode != null && IsInstanceValid(_attackMotionBoneNode))
+		{
+			return;
+		}
+
+		if (AttackMotionBonePath != null && !AttackMotionBonePath.IsEmpty)
+		{
+			_attackMotionBoneNode = GetNodeOrNull<Node2D>(AttackMotionBonePath);
+			if (_attackMotionBoneNode != null)
+			{
+				return;
+			}
+
+			_attackMotionBoneNode = GetNodeOrNull<Node2D>($"../{AttackMotionBonePath}");
+			if (_attackMotionBoneNode != null)
+			{
+				return;
+			}
+		}
+
+		_attackMotionBoneNode = GetNodeOrNull<Node2D>("SpineSprite/SpineBoneNode")
+			?? FindChild("SpineBoneNode", recursive: true, owned: false) as Node2D;
 	}
 
 	private void ApplyAttackAreaFacingTransform(bool faceRight)
@@ -267,9 +377,10 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 			Mathf.Abs(_currentAttackAreaBaseScale.Y));
 
 		Vector2 basePosition = _currentAttackShapeBasePosition;
-		_mainAttackCollisionShape.Position = new Vector2(
+		Vector2 facingPosition = new Vector2(
 			faceRight ? Mathf.Abs(basePosition.X) : -Mathf.Abs(basePosition.X),
 			basePosition.Y);
+		_mainAttackCollisionShape.Position = facingPosition + _currentAttackAnchorMotionOffset;
 
 		_mainAttackCollisionShape.Rotation = faceRight
 			? _currentAttackShapeBaseRotation
@@ -647,6 +758,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 			 // Check if AttackArea parent is NOT the flipped visual (to avoid double flipping)
 			 if (AttackArea.GetParent() != _spineCharacter && AttackArea.GetParent() != _sprite)
 			 {
+				 RefreshAttackAnchorTracking(resetOffset: true);
 				 ApplyAttackAreaFacingTransform(faceRight);
 			 }
 		}
