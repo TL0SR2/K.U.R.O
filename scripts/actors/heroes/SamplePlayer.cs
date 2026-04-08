@@ -78,7 +78,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	public ItemDefinition? LeftHandItem { get; private set; }
 	
 	/// <summary>
-	/// 当前左手物品对应的快捷栏槽位索引（1-4，对应数字键2-5）
+	/// 当前左手物品对应的快捷栏槽位索引（0-4，对应数字键1-5）
 	/// -1 表示未装备任何物品
 	/// </summary>
 	public int LeftHandSlotIndex { get; private set; } = -1;
@@ -422,13 +422,17 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	
 	public override void _UnhandledInput(InputEvent @event)
 	{
-		// 处理数字键 2、3、4、5 切换快捷栏物品（对应快捷栏槽位 1、2、3、4）
+		// 处理数字键 1-5 切换快捷栏物品（对应快捷栏槽位 0-4）
 		if (@event is InputEventKey keyEvent && keyEvent.Pressed)
 		{
 			int? slotIndex = null;
 			
-			// 数字键 2-5 对应快捷栏槽位 1-4（索引从0开始，但槽位0是小木剑）
-			if (keyEvent.Keycode == Key.Key2)
+			// 数字键 1-5 对应快捷栏槽位 0-4
+			if (keyEvent.Keycode == Key.Key1)
+			{
+				slotIndex = 0; // 快捷栏槽位1
+			}
+			else if (keyEvent.Keycode == Key.Key2)
 			{
 				slotIndex = 1; // 快捷栏槽位2
 			}
@@ -469,11 +473,11 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	/// 严格绑定：LeftHandSlotIndex 和 LeftHandItem 必须严格对应
 	/// 同時同步 PlayerInventoryComponent.SelectedQuickBarSlot
 	/// </summary>
-	/// <param name="slotIndex">快捷栏槽位索引（1-4，对应数字键2-5）</param>
+	/// <param name="slotIndex">快捷栏槽位索引（0-4，对应数字键1-5）</param>
 	private void SwitchToQuickBarSlot(int slotIndex)
 	{
-		// 验证槽位索引范围（1-4，跳过索引0的小木剑）
-		if (slotIndex < 1 || slotIndex > 4)
+		// 验证槽位索引范围（0-4）
+		if (slotIndex < 0 || slotIndex > 4)
 		{
 			return;
 		}
@@ -514,7 +518,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	/// </summary>
 	public void SyncLeftHandItemFromSlot()
 	{
-		if (LeftHandSlotIndex < 1 || LeftHandSlotIndex > 4)
+		if (LeftHandSlotIndex < 0 || LeftHandSlotIndex > 4)
 		{
 			// 如果槽位索引无效，清除左手物品
 			LeftHandItem = null;
@@ -561,7 +565,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	private void OnQuickBarInventoryChanged()
 	{
 		// 如果当前有选中的槽位，同步更新左手物品
-		if (LeftHandSlotIndex >= 1 && LeftHandSlotIndex <= 4)
+		if (LeftHandSlotIndex >= 0 && LeftHandSlotIndex <= 4)
 		{
 			SyncLeftHandItemFromSlot();
 			UpdateHandItemVisual();
@@ -679,23 +683,17 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		
 		if (battleHUD != null)
 		{
-			battleHUD.CallDeferred(BattleHUD.MethodName.UpdateHandSlotHighlight, LeftHandSlotIndex, 0);
+			battleHUD.CallDeferred(BattleHUD.MethodName.UpdateHandSlotHighlight, LeftHandSlotIndex, -1);
 		}
 	}
 	
 	/// <summary>
-	/// 初始化左手选择：默认选中快捷栏2（索引1）
-	/// 只在还没有选中任何槽位时才初始化，避免覆盖用户的选择
+	/// 初始化左手选择：不自动选中任何槽位，避免未按键时出现默认高亮
+	/// 仅当已有有效槽位时做同步
 	/// </summary>
 	public void InitializeLeftHandSelection()
 	{
-		// 如果还没有选中任何槽位，默认选中快捷栏2（索引1）
-		// 重要：只在 LeftHandSlotIndex 无效时才初始化，避免覆盖用户已选择的其他快捷栏
-		if (LeftHandSlotIndex < 1 || LeftHandSlotIndex > 4)
-		{
-			SwitchToQuickBarSlot(1);
-		}
-		else
+		if (LeftHandSlotIndex >= 0 && LeftHandSlotIndex <= 4)
 		{
 			// 即使已经选中，也要确保同步
 			if (InventoryComponent != null)
@@ -704,6 +702,12 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 			}
 			SyncLeftHandItemFromSlot();
 			UpdateHandItemVisual();
+			UpdateBattleHUDHandHighlight();
+		}
+		else
+		{
+			// 无有效选择时保持未选中状态，不触发默认高亮。
+			LeftHandItem = null;
 		}
 	}
 	
@@ -728,7 +732,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 			itemAttachment?.SubscribeToQuickBar();
 			
 			// 如果当前有选中的槽位，同步一次左手物品（可能是在 QuickBar 可用之前设置的）
-			if (LeftHandSlotIndex >= 1 && LeftHandSlotIndex <= 4)
+			if (LeftHandSlotIndex >= 0 && LeftHandSlotIndex <= 4)
 			{
 				// 同步 SelectedQuickBarSlot
 				InventoryComponent.SelectedQuickBarSlot = LeftHandSlotIndex;

@@ -39,6 +39,14 @@ namespace Kuros.Core
 		[ExportCategory("Loot")]
 		[Export] public LootDropTable? LootTable { get; set; }
 
+		[ExportCategory("VFX/Damage Flash")]
+		[Export] public bool EnableDamageFlash { get; set; } = true;
+		[Export] public bool FlashSpineVisual { get; set; } = true;
+		[Export] public bool FlashSpriteVisual { get; set; } = true;
+		[Export] public Color DamageFlashColor { get; set; } = new Color(1f, 0f, 0f, 1f);
+		[Export(PropertyHint.Range, "0,1,0.01,or_greater")]
+		public float DamageFlashDuration { get; set; } = 0.1f;
+
 		// Exposed state for States to use
 		public int CurrentHealth { get; protected set; }
 		public float AttackTimer { get; set; } = 0.0f;
@@ -51,6 +59,8 @@ namespace Kuros.Core
 		protected AnimationPlayer _animationPlayer = null!;
 		private Color _spineDefaultModulate = Colors.White;
 		private Color _spriteDefaultModulate = Colors.White;
+		private ulong _spineFlashToken;
+		private ulong _spriteFlashToken;
 		
 		// GDScript Helper to bypass C# wrapper issues with GDExtension
 		private Node _spineHelper = null!;
@@ -428,38 +438,49 @@ namespace Kuros.Core
 
 		protected virtual void FlashDamageEffect()
 		{
-			// Use GDScript helper for Spine
-			if (_spineHelper != null)
+			if (!EnableDamageFlash)
 			{
-				_spineHelper.Call("flash_damage", this, new Color(1f, 0f, 0f));
+				return;
+			}
+
+			float duration = Mathf.Max(0f, DamageFlashDuration);
+
+			// Use GDScript helper for Spine
+			if (FlashSpineVisual && _spineHelper != null)
+			{
+				_spineHelper.Call("flash_damage", this, DamageFlashColor, _spineDefaultModulate, duration);
 			}
 			// Fallback or legacy handling if wrapper exists
-			else if (_spineCharacter != null)
+			else if (FlashSpineVisual && _spineCharacter != null)
 			{
 				var visualNode = _spineCharacter;
 				Color baseColor = _spineDefaultModulate;
-				visualNode.Modulate = new Color(1f, 0f, 0f);
+				visualNode.Modulate = DamageFlashColor;
+				ulong flashToken = ++_spineFlashToken;
 
 				var tween = CreateTween();
-				tween.TweenInterval(0.1);
+				tween.TweenInterval(duration);
 				tween.TweenCallback(Callable.From(() =>
 				{
 					if (!GodotObject.IsInstanceValid(visualNode)) return;
+					if (flashToken != _spineFlashToken) return;
 					visualNode.Modulate = baseColor;
 				}));
 			}
 
-			if (_sprite != null)
+			if (FlashSpriteVisual && _sprite != null)
 			{
 				Color baseColor = _spriteDefaultModulate;
-				_sprite.Modulate = new Color(1f, 0f, 0f);
+				_sprite.Modulate = DamageFlashColor;
+				ulong flashToken = ++_spriteFlashToken;
 
 				var tween = CreateTween();
-				tween.TweenInterval(0.1);
+				tween.TweenInterval(duration);
 				Node2D targetNode = _sprite;
 				tween.TweenCallback(Callable.From(() =>
 				{
 					if (!GodotObject.IsInstanceValid(targetNode)) return;
+					if (flashToken != _spriteFlashToken) return;
 					targetNode.Modulate = baseColor;
 				}));
 			}

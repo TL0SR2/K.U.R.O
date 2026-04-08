@@ -1,4 +1,4 @@
-[gd_scene load_steps=34 format=3 uid="uid://ufprfd4r8ijj"]
+[gd_scene load_steps=39 format=3 uid="uid://ufprfd4r8ijj"]
 
 [ext_resource type="SpineAtlasResource" uid="uid://kpsje26gxbhr" path="res://assets/spine/main_character/Enemy_A1_zhuA.atlas" id="1_kqj82"]
 [ext_resource type="Script" uid="uid://12wblt72y8xt" path="res://scripts/actors/heroes/MainCharacter.cs" id="1_om6pm"]
@@ -27,6 +27,11 @@
 [ext_resource type="Script" uid="uid://c060w6pctgir3" path="res://scripts/actors/heroes/attacks/AttackHitboxDebugDrawer.cs" id="22_hitbox_debug"]
 [ext_resource type="PackedScene" uid="uid://ch7507iroiljg" path="res://scenes/ui/hud/EscapeHUD.tscn" id="24_tdm7a"]
 [ext_resource type="Resource" uid="uid://ckgxa7plx2tf7" path="res://resources/items/skills/WeaponSkill_Stab_Umbrella.tres" id="26_hitbox_preview_skill"]
+[ext_resource type="Script" uid="uid://ju5its2xwou2" path="res://scripts/actors/heroes/PlayerBuildController.cs" id="28_rs5xn"]
+[ext_resource type="Script" uid="uid://ba5xnpfo03sgb" path="res://scripts/actors/heroes/BuildLevelEffectEntry.cs" id="29_b3jlu"]
+[ext_resource type="Resource" uid="uid://dlngh4ui567ss" path="res://resources/builds/Build_Machine_level1.tres" id="30_6tvdn"]
+[ext_resource type="Resource" uid="uid://dhrqhkm1koxla" path="res://resources/builds/Build_Machine_level2.tres" id="31_a5ycu"]
+[ext_resource type="Resource" uid="uid://cg1ohbn3itor0" path="res://resources/builds/Build_Machine_level3.tres" id="32_a8ffv"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0y2r2"]
 shader = ExtResource("2_4ht1x")
@@ -235,3 +240,7 @@ PreviewSkill = ExtResource("26_hitbox_preview_skill")
 offset_top = -1737.4999
 offset_bottom = -1737.4999
 scale = Vector2(2.205, 2.205)
+
+[node name="BuildController" type="Node" parent="."]
+script = ExtResource("28_rs5xn")
+LevelEntries = Array[ExtResource("29_b3jlu")]([ExtResource("30_6tvdn"), ExtResource("31_a5ycu"), ExtResource("32_a8ffv")])

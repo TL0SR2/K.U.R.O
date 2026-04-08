@@ -5,7 +5,9 @@
 
 [resource]
 script = ExtResource("2_2o5f0")
-SkillId = "Weapon_Brawl_RiotBracer"
-DisplayName = "镇暴护腕技能名"
+SkillId = "Weapon_Brawl_MechGlove"
+DisplayName = "镇暴护腕攻击"
 AnimationName = "Weapon_Brawl_MechGlove"
+CooldownSeconds = 0.8
+Description = "攻击到敌人时击退该敌人0.5m"
 ActivationAction = "Weapon_Brawl_MechGlove"

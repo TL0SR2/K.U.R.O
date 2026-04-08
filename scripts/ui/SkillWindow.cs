@@ -1,5 +1,7 @@
 using Godot;
+using System;
 using System.Collections.Generic;
+using Kuros.Actors.Heroes;
 
 namespace Kuros.UI
 {
@@ -20,6 +22,7 @@ namespace Kuros.UI
         private SkillDetailWindow? _skillDetailWindow;
         private const string SkillDetailWindowPath = "res://scenes/ui/windows/SkillDetailWindow.tscn";
         private InventoryWindow? _cachedInventoryWindow;
+        private readonly List<OwnedBuildViewData> _ownedBuilds = new();
 
         // 技能数据（占位数据，等待接入真实技能接口）
         private readonly List<SkillData> _activeSkills = new();
@@ -62,6 +65,22 @@ namespace Kuros.UI
             UpdateCooldowns((float)delta);
         }
 
+        public override void _UnhandledInput(InputEvent @event)
+        {
+            base._UnhandledInput(@event);
+
+            if (!_isOpen || !Visible)
+            {
+                return;
+            }
+
+            if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo && keyEvent.Keycode == Key.Tab)
+            {
+                OnDetailButtonPressed();
+                GetViewport().SetInputAsHandled();
+            }
+        }
+
         /// <summary>
         /// 使用 Godot 原生 Connect 方法连接按钮信号
         /// 这种方式在导出版本中比 C# 委托方式更可靠
@@ -85,6 +104,12 @@ namespace Kuros.UI
             PassiveSkillsTitle ??= GetNodeOrNull<Label>("MainPanel/Body/SkillsVBox/PassiveSkillsSection/PassiveSkillsTitle");
             DetailButton ??= GetNodeOrNull<Button>("MainPanel/Body/DetailButton");
 
+            // 避免空格等 ui_accept 键触发详情按钮，导致与攻击键冲突。
+            if (DetailButton != null)
+            {
+                DetailButton.FocusMode = Control.FocusModeEnum.None;
+            }
+
             // 使用 Godot 原生 Connect 方法连接信号，在导出版本中更可靠
             ConnectButtonSignal(CloseButton, nameof(HideWindow));
             ConnectButtonSignal(DetailButton, nameof(OnDetailButtonPressed));
@@ -95,51 +120,51 @@ namespace Kuros.UI
         /// </summary>
         private void InitializePlaceholderSkills()
         {
-            // 占位主技能
-            _activeSkills.Add(new SkillData
+            _activeSkills.Clear();
+            _passiveSkills.Clear();
+            _ownedBuilds.Clear();
+
+            var buildController = FindPlayerBuildController();
+            if (buildController == null)
             {
-                Id = "skill_placeholder_1",
-                Name = "主技能1",
-                Description = "这是一个主技能的描述。主技能需要主动释放。",
-                Icon = null,
-                Cooldown = 5.0f,
-                CurrentCooldown = 0.0f,
-                IsActive = true
+                return;
+            }
+
+            buildController.RefreshBuildState();
+            int currentPoints = buildController.CurrentBuildCount;
+
+            var entries = new List<BuildLevelEffectEntry>();
+            foreach (var entry in buildController.LevelEntries)
+            {
+                if (entry != null)
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            entries.Sort((a, b) =>
+            {
+                int byPoints = a.RequiredPoints.CompareTo(b.RequiredPoints);
+                if (byPoints != 0) return byPoints;
+                return a.Level.CompareTo(b.Level);
             });
 
-            _activeSkills.Add(new SkillData
+            foreach (var entry in entries)
             {
-                Id = "skill_placeholder_2",
-                Name = "主技能2",
-                Description = "这是另一个主技能的描述。",
-                Icon = null,
-                Cooldown = 10.0f,
-                CurrentCooldown = 0.0f,
-                IsActive = true
-            });
+                if (currentPoints < entry.RequiredPoints)
+                {
+                    continue;
+                }
 
-            // 占位被动技能
-            _passiveSkills.Add(new SkillData
-            {
-                Id = "passive_placeholder_1",
-                Name = "被动技能1",
-                Description = "这是一个被动技能的描述。被动技能会自动生效。",
-                Icon = null,
-                Cooldown = 0.0f,
-                CurrentCooldown = 0.0f,
-                IsActive = false
-            });
+                _ownedBuilds.Add(new OwnedBuildViewData
+                {
+                    Name = string.IsNullOrWhiteSpace(entry.BuildName) ? $"构筑 Lv.{entry.Level}" : entry.BuildName,
+                    IconPath = entry.IconPath ?? string.Empty,
+                    Icon = LoadBuildIcon(entry.IconPath ?? string.Empty)
+                });
+            }
 
-            _passiveSkills.Add(new SkillData
-            {
-                Id = "passive_placeholder_2",
-                Name = "被动技能2",
-                Description = "这是另一个被动技能的描述。",
-                Icon = null,
-                Cooldown = 0.0f,
-                CurrentCooldown = 0.0f,
-                IsActive = false
-            });
+            // 不做未拥有构筑兜底：仅展示当前已拥有（已达成点数）的构筑图标。
         }
 
         /// <summary>
@@ -167,6 +192,28 @@ namespace Kuros.UI
             // 清空技能卡片引用，避免引用已释放的节点
             _skillCards.Clear();
 
+            // 仅显示当前已拥有构筑图标列表（不使用下拉框）
+            if (ActiveSkillsTitle != null)
+            {
+                ActiveSkillsTitle.Text = string.Empty;
+            }
+
+            if (PassiveSkillsTitle != null)
+            {
+                PassiveSkillsTitle.Visible = false;
+            }
+
+            if (PassiveSkillsContainer != null && PassiveSkillsContainer.GetParent() is Control passiveSection)
+            {
+                passiveSection.Visible = false;
+            }
+
+            if (ActiveSkillsContainer != null)
+            {
+                ActiveSkillsContainer.AddChild(CreateBuildIconsPanel());
+                return;
+            }
+
             // 显示主技能
             if (ActiveSkillsContainer != null)
             {
@@ -188,6 +235,114 @@ namespace Kuros.UI
                     _skillCards[skill.Id] = skillCard;
                 }
             }
+        }
+
+        private Control CreateBuildIconsPanel()
+        {
+            var panel = new Panel();
+            panel.CustomMinimumSize = new Vector2(300, 180);
+
+            var margin = new MarginContainer();
+            margin.AddThemeConstantOverride("margin_left", 12);
+            margin.AddThemeConstantOverride("margin_top", 12);
+            margin.AddThemeConstantOverride("margin_right", 12);
+            margin.AddThemeConstantOverride("margin_bottom", 12);
+            panel.AddChild(margin);
+
+            var root = new VBoxContainer();
+            root.AddThemeConstantOverride("separation", 10);
+            margin.AddChild(root);
+
+            if (_ownedBuilds.Count == 0)
+            {
+                var emptyLabel = new Label();
+                //emptyLabel.Text = "当前无已拥有构筑";
+                root.AddChild(emptyLabel);
+                return panel;
+            }
+
+            for (int i = 0; i < _ownedBuilds.Count; i++)
+            {
+                var iconRect = new TextureRect();
+                iconRect.CustomMinimumSize = new Vector2(96, 96);
+                iconRect.StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered;
+                iconRect.ExpandMode = TextureRect.ExpandModeEnum.FitWidthProportional;
+                iconRect.Texture = _ownedBuilds[i].Icon;
+                root.AddChild(iconRect);
+            }
+
+            return panel;
+        }
+
+        private PlayerBuildController? FindPlayerBuildController()
+        {
+            var tree = GetTree();
+            if (tree == null)
+            {
+                return null;
+            }
+
+            var root = tree.CurrentScene ?? tree.Root;
+            if (root == null)
+            {
+                return null;
+            }
+
+            return FindBuildControllerInTree(root);
+        }
+
+        private static PlayerBuildController? FindBuildControllerInTree(Node node)
+        {
+            if (node is PlayerBuildController controller)
+            {
+                return controller;
+            }
+
+            foreach (Node child in node.GetChildren())
+            {
+                var found = FindBuildControllerInTree(child);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
+        private static Texture2D? LoadBuildIcon(string iconPath)
+        {
+            if (string.IsNullOrWhiteSpace(iconPath))
+            {
+                return null;
+            }
+
+            var normalizedPath = iconPath.Trim();
+            var texture = ResourceLoader.Load<Texture2D>(normalizedPath);
+            if (texture != null)
+            {
+                return texture;
+            }
+
+            if (normalizedPath.StartsWith("uid://", StringComparison.OrdinalIgnoreCase))
+            {
+                long uid = ResourceUid.TextToId(normalizedPath);
+                if (uid == ResourceUid.InvalidId)
+                {
+                    string uidText = normalizedPath.Substring("uid://".Length);
+                    uid = ResourceUid.TextToId(uidText);
+                }
+                if (uid != ResourceUid.InvalidId)
+                {
+                    string resolvedPath = ResourceUid.GetIdPath(uid);
+                    if (!string.IsNullOrWhiteSpace(resolvedPath))
+                    {
+                        return ResourceLoader.Load<Texture2D>(resolvedPath);
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -448,6 +603,13 @@ namespace Kuros.UI
             public float Cooldown { get; set; } = 0.0f;
             public float CurrentCooldown { get; set; } = 0.0f;
             public bool IsActive { get; set; } = true;
+        }
+
+        private class OwnedBuildViewData
+        {
+            public string Name { get; set; } = string.Empty;
+            public string IconPath { get; set; } = string.Empty;
+            public Texture2D? Icon { get; set; }
         }
 
         /// <summary>
