@@ -99,7 +99,15 @@ namespace Kuros.Managers
             SubscribeDamageTaken(Target);
 
             // 订阅全局命中事件（player 攻击敌人时抖动）
+            GameActor.AnyDamageTaken -= OnAnyDamageTaken;
             GameActor.AnyDamageTaken += OnAnyDamageTaken;
+        }
+
+        public override void _ExitTree()
+        {
+            UnsubscribeDamageTaken();
+            GameActor.AnyDamageTaken -= OnAnyDamageTaken;
+            base._ExitTree();
         }
 
         public override void _Process(double delta)
@@ -427,12 +435,19 @@ namespace Kuros.Managers
 
         private void SubscribeDamageTaken(Node2D? target)
         {
-            if (!ShakeOnPlayerDamaged && !HitStopOnPlayerDamaged) return;
             _trackedActor = target as GameActor;
-            if (_trackedActor != null)
+            if (_trackedActor == null)
             {
-                _trackedActor.DamageTaken += OnTrackedActorDamageTaken;
+                return;
             }
+
+            if (!ShakeOnPlayerDamaged && !HitStopOnPlayerDamaged)
+            {
+                return;
+            }
+
+            _trackedActor.DamageTaken -= OnTrackedActorDamageTaken;
+            _trackedActor.DamageTaken += OnTrackedActorDamageTaken;
         }
 
         private void UnsubscribeDamageTaken()
@@ -442,7 +457,6 @@ namespace Kuros.Managers
                 _trackedActor.DamageTaken -= OnTrackedActorDamageTaken;
                 _trackedActor = null;
             }
-            GameActor.AnyDamageTaken -= OnAnyDamageTaken;
         }
 
         private void OnTrackedActorDamageTaken(int damage)

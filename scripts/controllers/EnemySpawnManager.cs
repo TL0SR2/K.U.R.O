@@ -69,12 +69,9 @@ namespace Kuros.Controllers
         [Export(PropertyHint.Range, "0,300,1")] public int BackEffectAppearFrame { get; set; } = 8;
         [Export(PropertyHint.Range, "0,10,0.05")] public float BackEffectGateTimeout { get; set; } = 3f;
         [Export] public bool FallbackToDelayWhenGateUnavailable { get; set; } = true;
-        [Export(PropertyHint.Range, "-1000,1000,1")] public int BackEffectZOffset { get; set; } = -1;
-        [Export(PropertyHint.Range, "-1000,1000,1")] public int FrontEffectZOffset { get; set; } = 1;
         [Export] public bool AutoLowerFrontEffectAfterEnemySpawn { get; set; } = false;
         [Export(PropertyHint.Range, "0,5,0.05")] public float FrontEffectLowerDelay { get; set; } = 0f;
         [Export(PropertyHint.Range, "-1000,1000,1")] public int FrontEffectPostSpawnZOffset { get; set; } = -1;
-        [Export] public bool ForceApplySpawnEffectZOffset { get; set; } = false;
 
         // [ExportCategory("Y-Sort")]
         // [Export] public bool EnableYAxisAutoLayering { get; set; } = false;
@@ -590,8 +587,8 @@ namespace Kuros.Controllers
                 GD.Print($"[{Name}] SpawnFX base={spawnPosition}, backOffset={SpawnBackEffectOffset}, backPos={backEffectPos}, frontOffset={SpawnFrontEffectOffset}, frontPos={frontEffectPos}");
             }
 
-            var backEffectInstance = SpawnEffect(SpawnBackEffectScene, backEffectPos, BackEffectZOffset);
-            var frontEffectInstance = SpawnEffect(SpawnFrontEffectScene, frontEffectPos, FrontEffectZOffset);
+            var backEffectInstance = SpawnEffect(SpawnBackEffectScene, backEffectPos);
+            var frontEffectInstance = SpawnEffect(SpawnFrontEffectScene, frontEffectPos);
 
             effectRefs.BackEffect = backEffectInstance?.Root;
             effectRefs.BackAnimatedSprite = backEffectInstance?.AnimatedSprite;
@@ -600,7 +597,7 @@ namespace Kuros.Controllers
             return effectRefs;
         }
 
-        private SpawnEffectInstance? SpawnEffect(PackedScene? effectScene, Vector2 spawnPosition, int zOffset)
+        private SpawnEffectInstance? SpawnEffect(PackedScene? effectScene, Vector2 spawnPosition)
         {
             if (effectScene == null)
             {
@@ -625,11 +622,6 @@ namespace Kuros.Controllers
             {
                 node2D.GlobalPosition = spawnPosition;
                 // 保留出生特效自身场景里的排序设置，不在生成器里强制修改 Z。
-                // if (ForceApplySpawnEffectZOffset)
-                // {
-                //     int baseZ = node2D.ZIndex;
-                //     ApplyNodeZIndex(node2D, spawnPosition, baseZ, zOffset);
-                // }
                 node2D.Visible = true;
             }
 
@@ -861,18 +853,6 @@ namespace Kuros.Controllers
             public Node2D? Root;
             public AnimatedSprite2D? AnimatedSprite;
             public bool Finished;
-        }
-
-        private void ApplyNodeZIndex(Node2D node2D, Vector2 worldPosition, int baseZ, int extraOffset)
-        {
-            // 已停用：生成器不再接管 enemy / effect 的 Y 轴和 Z 轴排序。
-            // 保留此方法仅为兼容旧调用。
-        }
-
-        private int ResolveZIndex(float worldY, int fallbackZ)
-        {
-            // 已停用：直接返回 enemy 自身场景配置的默认值。
-            return fallbackZ;
         }
 
         private bool ShouldDrawDebugOverlay()

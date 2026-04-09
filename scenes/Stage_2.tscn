@@ -59,7 +59,7 @@ y_sort_enabled = true
 position = Vector2(0, 20)
 
 [node name="MainCharacter" parent="World" instance=ExtResource("2_s0pgc")]
-position = Vector2(4897, 456.00006)
+position = Vector2(4734.0005, 586)
 
 [node name="Camera2D" type="Camera2D" parent="World/MainCharacter"]
 position = Vector2(0, -15.15156)
@@ -160,7 +160,7 @@ position = Vector2(-997, 337)
 scale = Vector2(1.2, 1.2)
 script = ExtResource("8_5klp8")
 EnemyScene = ExtResource("6_ctuyy")
-SpawnCount = 2
+SpawnCount = 10
 SpawnInterval = 1.35
 SpawnParentPath = NodePath("..")
 TriggerArea = NodePath("TriggerArea")

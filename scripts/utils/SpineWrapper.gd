@@ -4,6 +4,7 @@ extends Node
 # 因为 C# 绑定可能缺失，我们在 GDScript 中进行操作
 
 var _flash_tokens: Dictionary = {}
+var _flash_restore_colors: Dictionary = {}
 
 func find_spine_node(root: Node) -> Node:
 	if root.has_node("SpineCharacter"):
@@ -22,23 +23,42 @@ func flip_facing(root: Node, face_right: bool, default_face_left: bool) -> void:
 		if default_face_left: sign_val *= -1.0
 		sprite.scale.x = abs(sprite.scale.x) * sign_val
 
-func flash_damage(root: Node, color: Color, restore_color: Color = Color(1, 1, 1, 1), duration: float = 0.1) -> void:
+func flash_damage(root: Node, color: Color, restore_color = null, duration: float = 0.1) -> void:
 	var sprite = find_spine_node(root)
-	if sprite:
-		var key = sprite.get_instance_id()
-		var token = int(_flash_tokens.get(key, 0)) + 1
-		_flash_tokens[key] = token
-		sprite.modulate = color
-		
-		var tween = create_tween()
-		tween.tween_interval(maxf(duration, 0.0))
-		tween.tween_callback(func(): 
-			if not is_instance_valid(sprite):
-				return
-			if int(_flash_tokens.get(key, 0)) != token:
-				return
-			sprite.modulate = restore_color
-		)
+	if not sprite:
+		return
+
+	var key = sprite.get_instance_id()
+	var token = int(_flash_tokens.get(key, 0)) + 1
+	_flash_tokens[key] = token
+
+	var base_restore_color: Color
+	if restore_color is Color:
+		base_restore_color = restore_color
+	elif _flash_restore_colors.has(key):
+		base_restore_color = _flash_restore_colors[key]
+	else:
+		base_restore_color = sprite.modulate
+
+	_flash_restore_colors[key] = base_restore_color
+
+	var flash_color = color
+	flash_color.a = base_restore_color.a
+	sprite.modulate = flash_color
+	
+	var tween = create_tween()
+	tween.tween_interval(maxf(duration, 0.0))
+	tween.tween_callback(func(): 
+		if not is_instance_valid(sprite):
+			_flash_tokens.erase(key)
+			_flash_restore_colors.erase(key)
+			return
+		if int(_flash_tokens.get(key, 0)) != token:
+			return
+		sprite.modulate = _flash_restore_colors.get(key, base_restore_color)
+		_flash_tokens.erase(key)
+		_flash_restore_colors.erase(key)
+	)
 
 # 动画控制相关
 func play_animation(root: Node, anim_name: String, loop: bool, mix_duration: float = 0.1, time_scale: float = 1.0) -> bool:
