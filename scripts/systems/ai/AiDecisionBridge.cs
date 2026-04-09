@@ -13,11 +13,13 @@ namespace Kuros.Systems.AI
         [Signal] public delegate void DecisionChunkReceivedEventHandler(string chunkText);
         [Signal] public delegate void DecisionPromptBuiltEventHandler(string promptText);
         [Signal] public delegate void DecisionCompletedEventHandler(string responseText);
+        [Signal] public delegate void DecisionStructuredEventHandler(string decisionJson);
+        [Signal] public delegate void DecisionStructureFailedEventHandler(string errorMessage);
         [Signal] public delegate void DecisionFailedEventHandler(string errorMessage);
 
         [Export] public NodePath GameStateProviderPath { get; set; } = new("../GameStateProvider");
         [Export] public NodePath OllamaClientPath { get; set; } = new("../OllamaClient");
-        [Export(PropertyHint.MultilineText)] public string DefaultInstruction { get; set; } = "Analyze the current combat state and return the best next action.";
+        [Export(PropertyHint.MultilineText)] public string DefaultInstruction { get; set; } = "You are deciding for a fast-paced action game. Prefer proactive combat decisions. When enemies are present, usually choose attack, use_skill, or switch_weapon. Only choose retreat when the player is in genuine lethal danger.";
         [Export] public string Model { get; set; } = string.Empty;
         [Export] public bool Stream { get; set; } = true;
         [Export(PropertyHint.Range, "0,60,0.1")] public float MinRequestIntervalSeconds { get; set; } = 0.5f;
@@ -25,6 +27,9 @@ namespace Kuros.Systems.AI
         public bool RequestInFlight => _requestInFlight;
         public string LastPromptText { get; private set; } = string.Empty;
         public string LastDecisionText { get; private set; } = string.Empty;
+        public AiDecision LastStructuredDecision { get; private set; } = AiDecision.FromError(string.Empty, "No decision parsed yet.");
+        public string LastStructuredDecisionJson => LastStructuredDecision.ToJson(pretty: true);
+        public string LastDecisionParseError { get; private set; } = string.Empty;
         public string LastError { get; private set; } = string.Empty;
 
         private GameStateProvider? _gameStateProvider;
@@ -73,6 +78,8 @@ namespace Kuros.Systems.AI
             _lastRequestAtMs = now;
             LastPromptText = string.Empty;
             LastDecisionText = string.Empty;
+            LastStructuredDecision = AiDecision.FromError(string.Empty, "No decision parsed yet.");
+            LastDecisionParseError = string.Empty;
             LastError = string.Empty;
 
             try
@@ -90,7 +97,18 @@ namespace Kuros.Systems.AI
                 if (result.Success)
                 {
                     LastDecisionText = result.ResponseText;
+                    LastStructuredDecision = AiDecision.Parse(result.ResponseText);
+                    LastDecisionParseError = LastStructuredDecision.IsValid ? string.Empty : LastStructuredDecision.ParseError;
                     EmitSignal(SignalName.DecisionCompleted, result.ResponseText);
+
+                    if (LastStructuredDecision.IsValid)
+                    {
+                        EmitSignal(SignalName.DecisionStructured, LastStructuredDecisionJson);
+                    }
+                    else
+                    {
+                        EmitSignal(SignalName.DecisionStructureFailed, LastDecisionParseError);
+                    }
                 }
                 else
                 {

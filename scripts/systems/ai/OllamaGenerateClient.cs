@@ -84,23 +84,45 @@ namespace Kuros.Systems.AI
         public static string BuildGameStatePrompt(GameState state, string instruction)
         {
             string safeInstruction = string.IsNullOrWhiteSpace(instruction)
-                ? "Analyze the state and provide next action."
+                ? "Decide the next action for a fast-paced action game and prefer proactive combat behavior."
                 : instruction.Trim();
 
             return string.Join("\n", new[]
             {
                 "You are an in-game decision model.",
-                "Given the following current game state, return concise action advice.",
+                "This is a fast-paced action game, not a cautious turn-based tactics game.",
+                "Given the following current game state, return one executable decision.",
                 string.Empty,
                 "Instruction:",
                 safeInstruction,
+                string.Empty,
+                "Decision policy:",
+                "- When enemies are present, default to proactive combat behavior.",
+                "- Prefer attack, use_skill, or switch_weapon over retreat.",
+                "- Do not choose retreat just because enemies are nearby.",
+                "- Choose retreat only if the player is in clear lethal danger, such as very low hp or being overwhelmed while under attack.",
+                "- Prefer use_skill when pressure is high and a stronger immediate action makes sense.",
+                "- Prefer switch_weapon only when it clearly improves the current combat situation.",
+                "- Do not choose loot while enemies are actively threatening the player.",
+                "- Reposition should stay combat-focused and short-term, not passive avoidance.",
+                "- If alive_enemy_count > 0 and player hp is not critically low, usually return attack or use_skill.",
                 string.Empty,
                 "GameState(JSON):",
                 state.ToAiInputJson(pretty: false),
                 string.Empty,
                 "Output format:",
-                "- Return strict JSON object",
-                "- Keys: action, reason, risk_level"
+                "- Return strict JSON object only",
+                "- Do not wrap JSON in markdown code fences",
+                "- Required keys: intent, target, urgency, duration_seconds, reason",
+                "- intent must be a short snake_case action such as attack, retreat, reposition, loot, switch_weapon, use_skill",
+                "- target must be a short target label such as nearest_enemy, lowest_hp_enemy, safe_position, nearby_loot, none",
+                "- urgency must be one of: low, medium, high, critical",
+                "- duration_seconds must be a non-negative number",
+                "- reason must be one short sentence",
+                "- Keep the reason grounded in immediate action-game combat logic",
+                string.Empty,
+                "Example:",
+                "{\"intent\":\"attack\",\"target\":\"nearest_enemy\",\"urgency\":\"high\",\"duration_seconds\":1.2,\"reason\":\"A nearby enemy is within range and the player is not under immediate lethal threat.\"}"
             });
         }
 

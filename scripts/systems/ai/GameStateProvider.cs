@@ -39,6 +39,7 @@ namespace Kuros.Systems.AI
             var companions = ResolveCompanions(player);
             var (enemyCount, nearestDistance, averageDistance) = ResolveEnemyMetrics(player);
             var (backpackItemCount, backpackOccupiedSlots) = ResolveBackpackMetrics(player);
+            var quickBarState = ResolveQuickBarState(player);
 
             return new GameState
             {
@@ -52,6 +53,12 @@ namespace Kuros.Systems.AI
                 AverageEnemyDistance = averageDistance,
                 BackpackItemCount = backpackItemCount,
                 BackpackOccupiedSlots = backpackOccupiedSlots,
+                QuickBarSlotCount = quickBarState.slotCount,
+                QuickBarOccupiedSlots = quickBarState.occupiedSlots,
+                SelectedQuickBarSlotIndex = quickBarState.selectedSlotIndex,
+                SelectedQuickBarItemId = quickBarState.selectedItemId,
+                SelectedQuickBarItemName = quickBarState.selectedItemName,
+                QuickBarSlots = quickBarState.slots,
                 Companions = companions
             };
         }
@@ -199,6 +206,50 @@ namespace Kuros.Systems.AI
             }
 
             return (totalItemCount, occupiedSlots);
+        }
+
+        private static (int slotCount, int occupiedSlots, int selectedSlotIndex, string selectedItemId, string selectedItemName, List<QuickBarSlotState> slots) ResolveQuickBarState(SamplePlayer player)
+        {
+            var quickBar = player.InventoryComponent?.QuickBar;
+            int selectedSlotIndex = player.InventoryComponent?.SelectedQuickBarSlot ?? -1;
+            var slots = new List<QuickBarSlotState>();
+
+            if (quickBar == null)
+            {
+                return (0, 0, selectedSlotIndex, string.Empty, string.Empty, slots);
+            }
+
+            int occupiedSlots = 0;
+            string selectedItemId = string.Empty;
+            string selectedItemName = string.Empty;
+
+            for (int index = 0; index < quickBar.Slots.Count; index++)
+            {
+                var stack = quickBar.GetStack(index);
+                bool hasItem = stack != null && !stack.IsEmpty && stack.Item.ItemId != "empty_item";
+                if (hasItem)
+                {
+                    occupiedSlots++;
+                }
+
+                if (index == selectedSlotIndex && hasItem)
+                {
+                    selectedItemId = stack!.Item.ItemId;
+                    selectedItemName = stack.Item.DisplayName;
+                }
+
+                slots.Add(new QuickBarSlotState
+                {
+                    SlotIndex = index,
+                    IsSelected = index == selectedSlotIndex,
+                    IsOccupied = hasItem,
+                    ItemId = hasItem ? stack!.Item.ItemId : string.Empty,
+                    ItemName = hasItem ? stack!.Item.DisplayName : string.Empty,
+                    Quantity = hasItem ? stack!.Quantity : 0
+                });
+            }
+
+            return (quickBar.Slots.Count, occupiedSlots, selectedSlotIndex, selectedItemId, selectedItemName, slots);
         }
 
         private bool ResolvePlayerUnderAttack(SamplePlayer player)

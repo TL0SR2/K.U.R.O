@@ -41,7 +41,12 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	private Node2D? _attackMotionBoneNode;
 	private PlayerItemAttachment? _itemAttachment;
 	private AiDecisionBridge? _aiDecisionBridge;
+	private AiDecisionExecutor? _aiDecisionExecutor;
 	private readonly Godot.Collections.Array<Rid> _attackQueryExclude = new();
+	private Vector2 _aiMovementInput = Vector2.Zero;
+	private bool _aiRunPressed;
+	private bool _aiAttackQueued;
+	private bool _aiPickupQueued;
 	public PlayerFrozenState? FrozenState { get; private set; }
 	public PlayerInventoryComponent? InventoryComponent { get; private set; }
 	public InventoryContainer? Backpack => InventoryComponent?.Backpack;
@@ -49,6 +54,8 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	
 	[ExportCategory("UI")]
 	[Export] public Label StatsLabel { get; private set; } = null!; // Drag & Drop in Editor
+	[ExportCategory("AI")]
+	[Export] public Key AiAutopilotToggleKey { get; set; } = Key.F6;
 
 	[ExportCategory("Equipment")]
 	/// <summary>
@@ -109,6 +116,9 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 	// Signal for UI updates (Alternative to direct reference)
 	[Signal] public delegate void StatsChangedEventHandler(int health, int score);
 	[Signal] public delegate void GoldChangedEventHandler(int gold);
+	[Signal] public delegate void AiInputOverrideChangedEventHandler(bool enabled);
+
+	public bool AiInputOverrideEnabled { get; private set; }
 
 	public override void _Ready()
 	{
@@ -124,6 +134,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		if (WeaponSkillController == null) WeaponSkillController = GetNodeOrNull<PlayerWeaponSkillController>("WeaponSkillController");
 		_itemAttachment = GetNodeOrNull<PlayerItemAttachment>("ItemAttachment");
 		_aiDecisionBridge = GetNodeOrNull<AiDecisionBridge>("AiDecisionBridge");
+		_aiDecisionExecutor = GetNodeOrNull<AiDecisionExecutor>("AiDecisionExecutor");
 		if (_itemAttachment != null)
 		{
 			var callable = new Callable(this, MethodName.OnEquippedAttackAreaChanged);
@@ -428,10 +439,29 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		// 处理数字键 1-5 切换快捷栏物品（对应快捷栏槽位 0-4）
 		if (@event is InputEventKey keyEvent && keyEvent.Pressed)
 		{
+			if (keyEvent.Keycode == AiAutopilotToggleKey)
+			{
+				_aiDecisionExecutor ??= GetNodeOrNull<AiDecisionExecutor>("AiDecisionExecutor");
+				if (_aiDecisionExecutor != null)
+				{
+					_aiDecisionExecutor.SetAutopilotEnabled(!_aiDecisionExecutor.AutoPilotEnabled);
+					GameLogger.Info(nameof(SamplePlayer), $"AI autopilot toggled: {(_aiDecisionExecutor.AutoPilotEnabled ? "ON" : "OFF")}");
+				}
+
+				GetViewport().SetInputAsHandled();
+				return;
+			}
+
 			bool isPipeHotkey = keyEvent.Keycode == Key.Backslash || keyEvent.Unicode == '|';
 			if (isPipeHotkey)
 			{
 				_ = RequestAiDecisionTestAsync();
+				GetViewport().SetInputAsHandled();
+				return;
+			}
+
+			if (_aiDecisionExecutor?.AutoPilotEnabled == true)
+			{
 				GetViewport().SetInputAsHandled();
 				return;
 			}
@@ -469,6 +499,12 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 
 		if (@event.IsActionPressed("weapon_skill_block"))
 		{
+			if (_aiDecisionExecutor?.AutoPilotEnabled == true)
+			{
+				GetViewport().SetInputAsHandled();
+				return;
+			}
+
 			if (WeaponSkillController?.TryTriggerActionSkill("weapon_skill_block") == true)
 			{
 				GetViewport().SetInputAsHandled();
@@ -477,6 +513,93 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		}
 		
 		base._UnhandledInput(@event);
+	}
+
+	public void SetAiInputOverrideEnabled(bool enabled)
+	{
+		if (AiInputOverrideEnabled == enabled)
+		{
+			return;
+		}
+
+		AiInputOverrideEnabled = enabled;
+		if (!enabled)
+		{
+			ClearAiControlCommands();
+		}
+
+		EmitSignal(SignalName.AiInputOverrideChanged, enabled);
+	}
+
+	public void SetAiDesiredMovement(Vector2 movementInput, bool runPressed)
+	{
+		_aiMovementInput = movementInput.LimitLength(1f);
+		_aiRunPressed = runPressed;
+	}
+
+	public void QueueAiAttack()
+	{
+		_aiAttackQueued = true;
+	}
+
+	public void QueueAiPickup()
+	{
+		_aiPickupQueued = true;
+	}
+
+	public void ClearAiControlCommands()
+	{
+		_aiMovementInput = Vector2.Zero;
+		_aiRunPressed = false;
+		_aiAttackQueued = false;
+		_aiPickupQueued = false;
+	}
+
+	public Vector2 GetControlledMovementInput()
+	{
+		return AiInputOverrideEnabled
+			? _aiMovementInput
+			: Input.GetVector("move_left", "move_right", "move_forward", "move_back");
+	}
+
+	public bool IsControlledActionPressed(string actionName)
+	{
+		if (!AiInputOverrideEnabled)
+		{
+			return Input.IsActionPressed(actionName);
+		}
+
+		return actionName switch
+		{
+			"run" => _aiRunPressed,
+			_ => false
+		};
+	}
+
+	public bool ConsumeControlledActionJustPressed(string actionName)
+	{
+		if (!AiInputOverrideEnabled)
+		{
+			return Input.IsActionJustPressed(actionName);
+		}
+
+		return actionName switch
+		{
+			"attack" => ConsumeAiFlag(ref _aiAttackQueued),
+			"take_up" => ConsumeAiFlag(ref _aiPickupQueued),
+			_ => false
+		};
+	}
+
+	private static bool ConsumeAiFlag(ref bool flag)
+	{
+		if (!flag)
+		{
+			return false;
+		}
+
+		flag = false;
+		return true;
 	}
 
 	private async System.Threading.Tasks.Task RequestAiDecisionTestAsync()
@@ -495,7 +618,7 @@ public partial class SamplePlayer : GameActor, IPlayerStatsSource
 		}
 
 		GameLogger.Info(nameof(SamplePlayer), "AI test request started (|). ");
-		var result = await _aiDecisionBridge.RequestDecisionAsync("根据当前游戏状态给出下一步行动建议，返回 JSON，字段为 action, reason, risk_level。");
+		var result = await _aiDecisionBridge.RequestDecisionAsync("根据当前游戏状态给出下一步行动建议，严格返回 JSON，字段为 intent, target, urgency, duration_seconds, reason。");
 		if (result.Success)
 		{
 			string text = result.ResponseText ?? string.Empty;
