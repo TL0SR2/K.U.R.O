@@ -236,6 +236,3 @@ collision_mask = 4
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="World/EnemySpawneManager4/Area2D"]
 shape = SubResource("RectangleShape2D_f0l3g")
-
-[node name="Enemy_Normal_guard2" parent="World" instance=ExtResource("14_cwau0")]
-position = Vector2(-5276, 784)
