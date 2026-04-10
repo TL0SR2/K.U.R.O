@@ -75,8 +75,16 @@ namespace Kuros.Systems.AI
             }
 
             ResolveDependencies();
+            SubscribeBridgeSignals();
             if (_player == null || _bridge == null)
             {
+                if (_player != null)
+                {
+                    // Missing control dependencies: immediately return control to player input.
+                    _player.SetAiInputOverrideEnabled(false);
+                    _player.ClearAiControlCommands();
+                }
+
                 return;
             }
 
@@ -338,11 +346,19 @@ namespace Kuros.Systems.AI
 
             AutoPilotEnabled = enabled;
             ResolveDependencies();
+            SubscribeBridgeSignals();
+
+            bool canTakeOverInput = enabled && _player != null && _bridge != null;
 
             if (_player != null)
             {
-                _player.SetAiInputOverrideEnabled(enabled);
+                _player.SetAiInputOverrideEnabled(canTakeOverInput);
                 _player.ClearAiControlCommands();
+            }
+
+            if (enabled && !canTakeOverInput)
+            {
+                GameLogger.Warn(nameof(AiDecisionExecutor), "Autopilot enabled but dependencies are missing; fallback to manual input until ready.");
             }
 
             _activeDecision = null;
