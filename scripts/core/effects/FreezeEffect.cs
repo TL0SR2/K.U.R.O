@@ -24,7 +24,7 @@ namespace Kuros.Core.Effects
             if (Actor.StateMachine == null) return;
 
             _previousState = Actor.StateMachine.CurrentState?.Name ?? FallbackStateName;
-            Actor.StateMachine.ChangeState(FrozenStateName);
+            //Actor.StateMachine.ChangeState(FrozenStateName);
 
             Actor.Velocity = Vector2.Zero;
             Actor.MoveAndSlide();
@@ -38,11 +38,13 @@ namespace Kuros.Core.Effects
 
         public override void OnRemoved()
         {
-            Actor.AttackTimer = 0f;
+            bool skipStateRecovery = Actor.IsDeathSequenceActive || Actor.IsDead;
 
-            if (Actor.StateMachine != null)
+            if (!skipStateRecovery && Actor.StateMachine != null)
             {
                 var current = Actor.StateMachine.CurrentState?.Name;
+                // 只在自然到期（仍处于 Frozen 状态）时才恢复状态并清除冷却。
+                // 若已被命中等外部行为提前打断，则跳过，避免延迟触发多余的攻击循环。
                 if (current == FrozenStateName)
                 {
                     string targetState = FallbackStateName;
@@ -51,11 +53,11 @@ namespace Kuros.Core.Effects
                         targetState = _previousState;
                     }
 
+                    Actor.AttackTimer = 0f;
                     Actor.StateMachine.ChangeState(targetState);
+                    TryForceQueueNextAttack("FreezeRemoved");
                 }
             }
-
-            TryForceQueueNextAttack("FreezeRemoved");
 
             base.OnRemoved();
         }

@@ -30,6 +30,22 @@ namespace Kuros.Actors.Enemies.Attacks
         [Export] public string AnimationName = "animations/attack";
         [Export] public NodePath AttackAreaPath = new NodePath();
 
+        [ExportCategory("Knockback")]
+        [Export(PropertyHint.Range, "0,2000,1")] public float KnockbackDistance = 0f;
+        [Export(PropertyHint.Range, "0.01,2,0.01")] public float KnockbackDuration = 0.18f;
+        [Export(PropertyHint.Range, "0,6000,1")] public float KnockbackSpeed = 0f;
+
+        [ExportCategory("Animation Sync")]
+        [Export] public bool RequireAnimationHitTrigger = false;
+        [Export] public bool AllowMultipleAnimationHits = false;
+
+        [ExportCategory("Interrupt")]
+        [Export] public bool EnableSuperArmor = false;
+
+        [ExportCategory("Collision Override")]
+        [Export] public bool IgnoreEnemyCollisionDuringAttack = false;
+        [Export(PropertyHint.Range, "1,32,1")] public int EnemyCollisionLayerIndex = 2;
+
         protected SampleEnemy Enemy { get; private set; } = null!;
         protected SamplePlayer? Player => Enemy.PlayerTarget;
         protected Area2D? AttackArea { get; private set; }
@@ -37,6 +53,11 @@ namespace Kuros.Actors.Enemies.Attacks
         private AttackPhase _phase = AttackPhase.Idle;
         private float _phaseTimer = 0.0f;
         private float _cooldownTimer = 0.0f;
+        protected bool _animationHitReady = false;
+        private bool _pendingAnimationHitFromWarmup;
+        private bool? _previousIgnoreHitStateOnDamage;
+        private uint _cachedCollisionMask;
+        private bool _hasCollisionMaskOverride;
 
         public bool IsRunning => _phase != AttackPhase.Idle;
         public bool IsOnCooldown => _cooldownTimer > 0.0f;
@@ -85,6 +106,8 @@ namespace Kuros.Actors.Enemies.Attacks
 
             _cooldownTimer = CooldownDuration;
             Enemy.AttackTimer = Mathf.Max(Enemy.AttackTimer, CooldownDuration);
+            _animationHitReady = false;
+            _pendingAnimationHitFromWarmup = false;
 
             OnAttackStarted();
             SetPhase(AttackPhase.Warmup);
@@ -121,9 +144,23 @@ namespace Kuros.Actors.Enemies.Attacks
             }
         }
 
+        public override void _ExitTree()
+        {
+            RestoreEnemyCollisionMask();
+            base._ExitTree();
+        }
+
         protected virtual void OnAttackStarted()
         {
-            if (!string.IsNullOrEmpty(AnimationName))
+            ApplyEnemyCollisionMaskOverride();
+
+            if (EnableSuperArmor && Enemy != null)
+            {
+                _previousIgnoreHitStateOnDamage = Enemy.IgnoreHitStateOnDamage;
+                Enemy.IgnoreHitStateOnDamage = true;
+            }
+
+            if (Enemy != null && !string.IsNullOrEmpty(AnimationName))
             {
                 Enemy.AnimPlayer?.Play(AnimationName);
             }
@@ -136,15 +173,62 @@ namespace Kuros.Actors.Enemies.Attacks
 
         protected virtual void OnActivePhase()
         {
-            Enemy.PerformAttack();
+            if (RequireAnimationHitTrigger)
+            {
+                _animationHitReady = true;
+                return;
+            }
+
+            PerformAttackNow();
         }
 
         protected virtual void OnRecoveryStarted()
         {
             Enemy.Velocity = Enemy.Velocity.MoveToward(Vector2.Zero, Enemy.Speed);
+            _animationHitReady = false;
         }
 
-        protected virtual void OnAttackFinished() { }
+        protected virtual void OnAttackFinished()
+        {
+            RestoreEnemyCollisionMask();
+
+            if (Enemy != null && _previousIgnoreHitStateOnDamage.HasValue)
+            {
+                Enemy.IgnoreHitStateOnDamage = _previousIgnoreHitStateOnDamage.Value;
+            }
+
+            _previousIgnoreHitStateOnDamage = null;
+        }
+
+        private void ApplyEnemyCollisionMaskOverride()
+        {
+            if (!IgnoreEnemyCollisionDuringAttack || Enemy == null || _hasCollisionMaskOverride)
+            {
+                return;
+            }
+
+            int clampedLayer = Mathf.Clamp(EnemyCollisionLayerIndex, 1, 32);
+            uint enemyLayerBit = 1u << (clampedLayer - 1);
+            _cachedCollisionMask = Enemy.CollisionMask;
+            Enemy.CollisionMask = _cachedCollisionMask & ~enemyLayerBit;
+            _hasCollisionMaskOverride = true;
+        }
+
+        private void RestoreEnemyCollisionMask()
+        {
+            if (Enemy == null || !_hasCollisionMaskOverride)
+            {
+                return;
+            }
+
+            Enemy.CollisionMask = _cachedCollisionMask;
+            _hasCollisionMaskOverride = false;
+        }
+
+        protected virtual bool ShouldHoldRecoveryPhase()
+        {
+            return false;
+        }
 
         protected void ForceEnterRecoveryPhase()
         {
@@ -166,6 +250,7 @@ namespace Kuros.Actors.Enemies.Attacks
                 case AttackPhase.Active:
                     _phaseTimer = ActiveDuration;
                     OnActivePhase();
+                    TryConsumePendingAnimationHit();
                     break;
                 case AttackPhase.Recovery:
                     _phaseTimer = RecoveryDuration;
@@ -191,12 +276,154 @@ namespace Kuros.Actors.Enemies.Attacks
                     SetPhase(AttackPhase.Active);
                     break;
                 case AttackPhase.Active:
+                    _animationHitReady = false;
+                    _pendingAnimationHitFromWarmup = false;
                     SetPhase(AttackPhase.Recovery);
                     break;
                 case AttackPhase.Recovery:
+                    if (ShouldHoldRecoveryPhase())
+                    {
+                        _phaseTimer = 0.05f;
+                        return;
+                    }
+
                     SetPhase(AttackPhase.Idle);
                     break;
             }
+        }
+
+        protected void PerformAttackNow()
+        {
+            Enemy.PerformAttack();
+        }
+
+        /// <summary>
+        /// Spine 帧事件 hit 到达时执行的逻辑。
+        /// 默认调用 PerformAttackNow()，子类可覆写以追加击退等额外效果。
+        /// 仅在 RequireAnimationHitTrigger = true 时才会被 TriggerAnimationHit 调用。
+        /// </summary>
+        protected virtual void OnAnimationHit()
+        {
+            PerformAttackNow();
+        }
+
+        public void TriggerAnimationHit()
+        {
+            GD.Print($"[TriggerAnimationHit] RequireAnimationHitTrigger={RequireAnimationHitTrigger}, _animationHitReady={_animationHitReady}, AllowMultipleAnimationHits={AllowMultipleAnimationHits}");
+            if (!RequireAnimationHitTrigger)
+            {
+                GD.Print("[TriggerAnimationHit] RequireAnimationHitTrigger is false, skip");
+                return;
+            }
+
+            if (!_animationHitReady)
+            {
+                if (_phase == AttackPhase.Warmup)
+                {
+                    _pendingAnimationHitFromWarmup = true;
+                    GD.Print("[TriggerAnimationHit] _animationHitReady is false during Warmup, buffer this hit");
+                    return;
+                }
+
+                GD.Print("[TriggerAnimationHit] _animationHitReady is false, skip");
+                return;
+            }
+
+            GD.Print("[TriggerAnimationHit] Calling OnAnimationHit()");
+            OnAnimationHit();
+
+            if (!AllowMultipleAnimationHits)
+            {
+                _animationHitReady = false;
+                GD.Print("[TriggerAnimationHit] Set _animationHitReady = false");
+            }
+        }
+
+        private void TryConsumePendingAnimationHit()
+        {
+            if (!RequireAnimationHitTrigger)
+            {
+                _pendingAnimationHitFromWarmup = false;
+                return;
+            }
+
+            if (!_pendingAnimationHitFromWarmup || !_animationHitReady)
+            {
+                return;
+            }
+
+            GD.Print("[TriggerAnimationHit] Consume buffered warmup hit");
+            OnAnimationHit();
+            _pendingAnimationHitFromWarmup = false;
+
+            if (!AllowMultipleAnimationHits)
+            {
+                _animationHitReady = false;
+            }
+        }
+
+        protected bool TryApplyPlayerKnockback(SamplePlayer player, float distance, float duration, float configuredSpeed, Vector2 fallbackDirection)
+        {
+            if (Enemy == null || player == null)
+            {
+                return false;
+            }
+
+            if (player is Kuros.Actors.Heroes.MainCharacter mainCharacter && mainCharacter.IsHitInvincible)
+            {
+                if (!mainCharacter.ConsumePendingHitKnockback())
+                {
+                    return false;
+                }
+            }
+
+            float clampedDuration = Mathf.Max(duration, 0.01f);
+            float clampedDistance = Mathf.Max(0f, distance);
+            float clampedConfiguredSpeed = Mathf.Max(0f, configuredSpeed);
+            if (clampedDistance <= 0f && clampedConfiguredSpeed <= 0f)
+            {
+                return false;
+            }
+
+            float speed = clampedConfiguredSpeed > 0f ? clampedConfiguredSpeed : clampedDistance / clampedDuration;
+            if (speed <= 0f)
+            {
+                return false;
+            }
+
+            Vector2 direction = player.GlobalPosition - Enemy.GlobalPosition;
+            if (direction == Vector2.Zero)
+            {
+                direction = fallbackDirection != Vector2.Zero
+                    ? fallbackDirection
+                    : (Enemy.FacingRight ? Vector2.Right : Vector2.Left);
+            }
+
+            Vector2 knockbackVelocity = direction.Normalized() * speed;
+            player.Velocity = knockbackVelocity;
+            ApplyFrozenExternalDisplacement(player, knockbackVelocity, clampedDuration);
+            return true;
+        }
+
+        protected static void ApplyFrozenExternalDisplacement(SamplePlayer player, Vector2 velocity, float duration)
+        {
+            var frozenState = player.StateMachine?.GetNodeOrNull<Kuros.Actors.Heroes.States.PlayerFrozenState>("Frozen");
+            if (frozenState == null)
+            {
+                return;
+            }
+
+            if (player.StateMachine?.CurrentState != frozenState)
+            {
+                return;
+            }
+
+            if (!frozenState.AllowExternalDisplacementWhileFrozen)
+            {
+                return;
+            }
+
+            frozenState.ApplyExternalDisplacement(velocity, duration);
         }
     }
 }

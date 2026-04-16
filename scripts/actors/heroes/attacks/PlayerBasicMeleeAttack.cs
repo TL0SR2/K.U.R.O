@@ -22,18 +22,24 @@ namespace Kuros.Actors.Heroes.Attacks
             TriggerActions.Clear();
             TriggerActions.Add("attack");
             RequiresTargetInRange = false;
-            WarmupDuration = 0.15f;
-            ActiveDuration = 0.2f;
-            RecoveryDuration = 0.35f;
-            CooldownDuration = 0.5f;
             AnimationName = _defaultAnimation;
+            UseEquippedWeaponSkillAnimation = true;
             _weaponSkillController = Player.GetNodeOrNull<PlayerWeaponSkillController>("WeaponSkillController");
             _inventory = Player.InventoryComponent ?? Player.GetNodeOrNull<PlayerInventoryComponent>("Inventory");
         }
 
         protected override void OnAttackStarted()
         {
-            AnimationName = _defaultAnimation;
+            // 如果是 MainCharacter，使用攻击动画名称
+            if (Player is MainCharacter mainChar)
+            {
+                AnimationName = mainChar.AttackAnimationName;
+            }
+            else
+            {
+                AnimationName = _defaultAnimation;
+            }
+            
             DamageOverride = Player.AttackDamage;
 
             if (_inventory != null)
@@ -43,16 +49,11 @@ namespace Kuros.Actors.Heroes.Attacks
 
             if (_weaponSkillController != null)
             {
-                var overrideAnim = _weaponSkillController.GetPrimarySkillAnimation();
-                if (!string.IsNullOrEmpty(overrideAnim))
-                {
-                    AnimationName = overrideAnim;
-                }
-
                 DamageOverride = _weaponSkillController.ModifyAttackDamage(DamageOverride);
                 _weaponSkillController.TriggerDefaultSkill();
             }
 
+            // 调用基类方法，基类会自动检测 MainCharacter 并播放 Spine 动画
             base.OnAttackStarted();
         }
 

@@ -13,483 +13,623 @@ using Kuros.Utils;
 
 namespace Kuros.Items.World
 {
-    /// <summary>
-    /// 地图场景中的物品实体，与具体 <see cref="ItemDefinition"/> 一一对应，
-    /// 负责识别物品、暴露属性并在拾取/丢弃时与背包系统交互。
-    /// </summary>
-    public partial class WorldItemEntity : CharacterBody2D
-    {
-        [Signal] public delegate void ItemTransferredEventHandler(WorldItemEntity entity, GameActor actor, ItemDefinition item, int amount);
-        [Signal] public delegate void ItemTransferFailedEventHandler(WorldItemEntity entity, GameActor actor);
+	/// <summary>
+	/// 地图场景中的物品实体，与具体 <see cref="ItemDefinition"/> 一一对应，
+	/// 负责识别物品、暴露属性并在拾取/丢弃时与背包系统交互。
+	/// </summary>
+	public partial class WorldItemEntity : CharacterBody2D, IWorldItemEntity
+	{
+		[Signal] public delegate void ItemTransferredEventHandler(WorldItemEntity entity, GameActor actor, ItemDefinition item, int amount);
+		[Signal] public delegate void ItemTransferFailedEventHandler(WorldItemEntity entity, GameActor actor);
 
-        [ExportGroup("Item")]
-        [Export] public ItemDefinition? ItemDefinition { get; set; }
-        [Export(PropertyHint.File, "*.tres,*.res")] public string ItemDefinitionResourcePath { get; set; } = string.Empty;
-        [Export] public string ItemIdOverride { get; set; } = string.Empty;
-        [Export(PropertyHint.Range, "1,9999,1")] public int Quantity { get; set; } = 1;
+		[ExportGroup("Item")]
+		[Export] public ItemDefinition? ItemDefinition { get; set; }
+		[Export(PropertyHint.File, "*.tres,*.res")] public string ItemDefinitionResourcePath { get; set; } = string.Empty;
+		[Export] public string ItemIdOverride { get; set; } = string.Empty;
+		[Export(PropertyHint.Range, "1,9999,1")] public int Quantity { get; set; } = 1;
 
-        [ExportGroup("Pickup")]
-        [Export] public Area2D TriggerArea { get; private set; } = null!;
-        [Export] public bool AutoDisableTriggerOnPickup { get; set; } = true;
+		[ExportGroup("Pickup")]
+		[Export] public Area2D TriggerArea { get; private set; } = null!;
+		[Export] public bool AutoDisableTriggerOnPickup { get; set; } = true;
 
-        [ExportGroup("World Physics")]
-        [Export(PropertyHint.Range, "0,4000,1")] public float ThrowFriction = 600f;
-        [Export] public uint BodyCollisionLayer { get; set; } = 0;  // 禁用 body 碰撞
-        [Export] public uint BodyCollisionMask { get; set; } = 0;   // 禁用 body 碰撞
-        [Export] public uint TriggerCollisionLayer { get; set; } = 1u << 1;  // collision_layer = 2
-        [Export] public uint TriggerCollisionMask { get; set; } = 1u;        // collision_mask = 1
+		[ExportGroup("Outline Highlight")]
+		[Export] public bool EnableGrabAreaOutlineHighlight { get; set; } = true;
+		[Export] public NodePath HighlightSpritePath { get; set; } = new("Outline");
+		[Export] public Color DefaultOutlineColor { get; set; } = new Color(0f, 0f, 0f, 1f);
+		[Export] public Color HighlightOutlineColor { get; set; } = new Color(1f, 1f, 1f, 1f);
 
-        public InventoryItemStack? CurrentStack { get; private set; }
-        public string ItemId => !string.IsNullOrWhiteSpace(ItemIdOverride)
-            ? ItemIdOverride
-            : ItemDefinition?.ItemId ?? DeriveItemIdFromScene();
+		[ExportGroup("World Physics")]
+		[Export(PropertyHint.Range, "0,4000,1")] public float ThrowFriction = 600f;
+		[Export] public uint BodyCollisionLayer { get; set; } = 0;  // 禁用 body 碰撞
+		[Export] public uint BodyCollisionMask { get; set; } = 0;   // 禁用 body 碰撞
+		[Export] public uint TriggerCollisionLayer { get; set; } = 1u << 1;  // collision_layer = 2
+		[Export] public uint TriggerCollisionMask { get; set; } = 1u;        // collision_mask = 1
 
-        private ItemDefinition? _lastTransferredItem;
-        private int _lastTransferredAmount;
-        private Vector2 _pendingVelocity;
-        private GameActor? _focusedActor;
-        private bool _isPicked;
-        private bool _initialMonitoring;
-        private bool _initialMonitorable;
-        private uint _initialCollisionLayer;
-        private uint _initialCollisionMask;
+		public InventoryItemStack? CurrentStack { get; private set; }
+		public string ItemId => !string.IsNullOrWhiteSpace(ItemIdOverride)
+			? ItemIdOverride
+			: ItemDefinition?.ItemId ?? DeriveItemIdFromScene();
 
-        public GameActor? LastDroppedBy { get; set; }
-        protected Vector2 PendingVelocity => _pendingVelocity;
+		private ItemDefinition? _lastTransferredItem;
+		private int _lastTransferredAmount;
+		private Vector2 _pendingVelocity;
+		private GameActor? _focusedActor;
+		private Sprite2D? _highlightSprite;
+		private ShaderMaterial? _outlineMaterial;
+		private Area2D? _cachedPlayerGrabArea;
+		private bool _isOutlineHighlighted;
+		private bool _isPicked;
+		private bool _initialMonitoring;
+		private bool _initialMonitorable;
+		private uint _initialCollisionLayer;
+		private uint _initialCollisionMask;
 
-        public override void _Ready()
-        {
-            base._Ready();
-            InitializeStack();
-            ResolveTriggerArea();
-            ApplyCollisionSettings();
-            UpdateSprite(); // 更新精灵贴图
-            SetProcess(true);
-            SetPhysicsProcess(true);
-        }
+		public GameActor? LastDroppedBy { get; set; }
+		protected Vector2 PendingVelocity => _pendingVelocity;
 
-        public override void _ExitTree()
-        {
-            base._ExitTree();
-            if (TriggerArea != null)
-            {
-                TriggerArea.BodyEntered -= OnBodyEntered;
-                TriggerArea.BodyExited -= OnBodyExited;
-            }
-        }
+		public override void _Ready()
+		{
+			base._Ready();
+			AddToGroup("world_items");  // 将物品添加到 "world_items" 组，用于场景中的物品管理
+    		AddToGroup("pickables");    // 统一使用 "pickables" 组来标识可拾取对象，方便 PlayerItemInteractionComponent 处理
+			InitializeStack();
+			ResolveTriggerArea();
+			ApplyCollisionSettings();
+			UpdateSprite(); // 更新精灵贴图
+			ResolveOutlineHighlight();
+			UpdateOutlineHighlight(force: true);
+			SetProcess(true);
+			SetPhysicsProcess(true);
+		}
 
-        public override void _Process(double delta)
-        {
-            base._Process(delta);
+		public override void _ExitTree()
+		{
+			base._ExitTree();
+			if (TriggerArea != null)
+			{
+				var entered = new Callable(this, MethodName.OnBodyEntered);
+				var exited = new Callable(this, MethodName.OnBodyExited);
+				if (TriggerArea.IsConnected(Area2D.SignalName.BodyEntered, entered))
+				{
+					TriggerArea.BodyEntered -= OnBodyEntered;
+				}
 
-            // 注意：拾取逻辑已移至 PlayerItemInteractionComponent 统一处理
-            // 这里不再监听 take_up 输入，避免多个物品同时被拾取的问题
-            // WorldItemEntity 只负责追踪哪个 Actor 在范围内（_focusedActor）
-            
-            if (_isPicked || _focusedActor == null)
-            {
-                return;
-            }
+				if (TriggerArea.IsConnected(Area2D.SignalName.BodyExited, exited))
+				{
+					TriggerArea.BodyExited -= OnBodyExited;
+				}
+			}
+		}
 
-            if (!GodotObject.IsInstanceValid(_focusedActor))
-            {
-                _focusedActor = null;
-                return;
-            }
-        }
+		public override void _Process(double delta)
+		{
+			base._Process(delta);
 
-        public override void _PhysicsProcess(double delta)
-        {
-            base._PhysicsProcess(delta);
+			// 注意：拾取逻辑已移至 PlayerItemInteractionComponent 统一处理
+			// 这里不再监听 take_up 输入，避免多个物品同时被拾取的问题
+			// WorldItemEntity 只负责追踪哪个 Actor 在范围内（_focusedActor）
+			UpdateOutlineHighlight();
+			
+			if (_isPicked || _focusedActor == null)
+			{
+				return;
+			}
 
-            if (_pendingVelocity.LengthSquared() > 0.0001f)
-            {
-                Velocity = _pendingVelocity;
-                MoveAndSlide();
-                float decel = ThrowFriction * (float)delta;
-                _pendingVelocity = _pendingVelocity.MoveToward(Vector2.Zero, decel);
-                if (_pendingVelocity.LengthSquared() <= 0.0001f)
-                {
-                    Velocity = Vector2.Zero;
-                }
-            }
-            else if (Velocity.LengthSquared() > 0.0001f)
-            {
-                Velocity = Vector2.Zero;
-            }
-        }
+			if (!GodotObject.IsInstanceValid(_focusedActor))
+			{
+				_focusedActor = null;
+				return;
+			}
+		}
 
-        public Dictionary<string, float> GetAttributeSnapshot()
-        {
-            if (CurrentStack != null)
-            {
-                return CurrentStack.Item.GetAttributeSnapshot(CurrentStack.Quantity);
-            }
+		public override void _PhysicsProcess(double delta)
+		{
+			base._PhysicsProcess(delta);
 
-            return ItemDefinition != null
-                ? ItemDefinition.GetAttributeSnapshot(Math.Max(1, Quantity))
-                : new Dictionary<string, float>();
-        }
+			if (_pendingVelocity.LengthSquared() > 0.0001f)
+			{
+				Velocity = _pendingVelocity;
+				MoveAndSlide();
+				float decel = ThrowFriction * (float)delta;
+				_pendingVelocity = _pendingVelocity.MoveToward(Vector2.Zero, decel);
+				if (_pendingVelocity.LengthSquared() <= 0.0001f)
+				{
+					Velocity = Vector2.Zero;
+				}
+			}
+			else if (Velocity.LengthSquared() > 0.0001f)
+			{
+				Velocity = Vector2.Zero;
+			}
+		}
 
-        public void InitializeFromStack(InventoryItemStack stack)
-        {
-            if (stack == null) throw new ArgumentNullException(nameof(stack));
+		public Dictionary<string, float> GetAttributeSnapshot()
+		{
+			if (CurrentStack != null)
+			{
+				return CurrentStack.Item.GetAttributeSnapshot(CurrentStack.Quantity);
+			}
 
-            ItemDefinition = stack.Item;
-            Quantity = stack.Quantity;
-            CurrentStack = new InventoryItemStack(stack.Item, stack.Quantity);
-            
-            // 更新精灵贴图
-            UpdateSprite();
-        }
+			return ItemDefinition != null
+				? ItemDefinition.GetAttributeSnapshot(Math.Max(1, Quantity))
+				: new Dictionary<string, float>();
+		}
 
-        public void InitializeFromItem(ItemDefinition definition, int quantity)
-        {
-            if (definition == null) throw new ArgumentNullException(nameof(definition));
-            quantity = Math.Max(1, quantity);
+		public void InitializeFromStack(InventoryItemStack stack)
+		{
+			if (stack == null) throw new ArgumentNullException(nameof(stack));
 
-            ItemDefinition = definition;
-            Quantity = quantity;
-            CurrentStack = new InventoryItemStack(definition, quantity);
-            
-            // 更新精灵贴图
-            UpdateSprite();
-        }
+			ItemDefinition = stack.Item;
+			Quantity = stack.Quantity;
+			CurrentStack = new InventoryItemStack(stack.Item, stack.Quantity);
+			
+			// 更新精灵贴图
+			UpdateSprite();
+		}
 
-        /// <summary>
-        /// 根据物品定义更新精灵贴图
-        /// </summary>
-        private void UpdateSprite()
-        {
-            var sprite = GetNodeOrNull<Sprite2D>("Sprite2D");
-            if (sprite == null)
-            {
-                return;
-            }
+		public void InitializeFromItem(ItemDefinition definition, int quantity)
+		{
+			if (definition == null) throw new ArgumentNullException(nameof(definition));
+			quantity = Math.Max(1, quantity);
 
-            // 如果物品定义有图标，使用它；否则保持默认贴图
-            // 注意：保持场景中设置的缩放，不重置
-            if (ItemDefinition?.Icon != null)
-            {
-                sprite.Texture = ItemDefinition.Icon;
-            }
-        }
+			ItemDefinition = definition;
+			Quantity = quantity;
+			CurrentStack = new InventoryItemStack(definition, quantity);
+			
+			// 更新精灵贴图
+			UpdateSprite();
+		}
 
-        public virtual void ApplyThrowImpulse(Vector2 velocity)
-        {
-            _pendingVelocity = velocity;
-            Velocity = velocity;
-        }
+		/// <summary>
+		/// 根据物品定义更新精灵贴图
+		/// </summary>
+		private void UpdateSprite()
+		{
+			var sprite = GetNodeOrNull<Sprite2D>("Sprite2D");
+			if (sprite == null)
+			{
+				return;
+			}
 
-        /// <summary>
-        /// 供外部调用的拾取方法（如状态机或其他组件触发）
-        /// </summary>
-        public bool TryPickupByActor(GameActor actor)
-        {
-            if (_isPicked)
-            {
-                return false;
-            }
+			// 如果物品定义有图标，使用它；否则保持默认贴图
+			// 注意：保持场景中设置的缩放，不重置
+			if (ItemDefinition?.Icon != null)
+			{
+				sprite.Texture = ItemDefinition.Icon;
+			}
+		}
 
-            if (!TryTransferToActor(actor))
-            {
-                return false;
-            }
+		private void ResolveOutlineHighlight()
+		{
+			if (!EnableGrabAreaOutlineHighlight)
+			{
+				_outlineMaterial = null;
+				return;
+			}
 
-            ApplyItemEffects(actor, ItemEffectTrigger.OnPickup);
-            
-            // 同步玩家的左手物品和快捷栏显示
-            SyncPlayerHandAndQuickBar(actor);
+			if (_highlightSprite == null || !GodotObject.IsInstanceValid(_highlightSprite))
+			{
+				_highlightSprite = !HighlightSpritePath.IsEmpty
+					? GetNodeOrNull<Sprite2D>(HighlightSpritePath)
+					: null;
 
-            // 检查是否为部分转移（地面仍有剩余物品）
-            if (Quantity > 0)
-            {
-                // 部分转移 - 发出信号但保持实体可交互
-                if (_lastTransferredItem != null && _lastTransferredAmount > 0)
-                {
-                    EmitSignal(SignalName.ItemTransferred, this, actor, _lastTransferredItem, _lastTransferredAmount);
-                }
-                return true;
-            }
+				_highlightSprite ??= GetNodeOrNull<Sprite2D>("Sprite2D");
+			}
 
-            // 完整转移 - 继续正常的拾取完成流程
-            _isPicked = true;
-            if (AutoDisableTriggerOnPickup)
-            {
-                DisableTriggerArea();
-            }
+			if (_highlightSprite?.Material is ShaderMaterial spriteMaterial)
+			{
+				if (!ReferenceEquals(spriteMaterial, _outlineMaterial))
+				{
+					_outlineMaterial = spriteMaterial.Duplicate() as ShaderMaterial;
+					if (_outlineMaterial != null)
+					{
+						_outlineMaterial.ResourceLocalToScene = true;
+						_highlightSprite.Material = _outlineMaterial;
+					}
+				}
+			}
+			else
+			{
+				_outlineMaterial = null;
+			}
+		}
 
-            OnPicked(actor);
-            return true;
-        }
-        
-        /// <summary>
-        /// 同步玩家的左手物品和快捷栏显示
-        /// </summary>
-        private void SyncPlayerHandAndQuickBar(GameActor actor)
-        {
-            if (actor is SamplePlayer player)
-            {
-                // 同步左手物品
-                player.SyncLeftHandItemFromSlot();
-                player.UpdateHandItemVisual();
-                
-                // 刷新 BattleHUD 快捷栏显示
-                var battleHUD = UIManager.Instance?.GetUI<BattleHUD>("BattleHUD");
-                if (battleHUD == null)
-                {
-                    battleHUD = GetTree().GetFirstNodeInGroup("ui") as BattleHUD;
-                }
-                
-                if (battleHUD != null)
-                {
-                    battleHUD.CallDeferred("UpdateQuickBarDisplay");
-                    int leftHandSlot = player.LeftHandSlotIndex >= 1 && player.LeftHandSlotIndex < 5 ? player.LeftHandSlotIndex : -1;
-                    battleHUD.CallDeferred("UpdateHandSlotHighlight", leftHandSlot, 0);
-                }
-            }
-        }
+		private Area2D? ResolvePlayerGrabArea()
+		{
+			if (_cachedPlayerGrabArea != null && GodotObject.IsInstanceValid(_cachedPlayerGrabArea))
+			{
+				return _cachedPlayerGrabArea;
+			}
 
-        private void ResolveTriggerArea()
-        {
-            if (TriggerArea == null)
-            {
-                TriggerArea = GetNodeOrNull<Area2D>("TriggerArea") ??
-                              throw new InvalidOperationException($"{Name} 缺少 TriggerArea 节点。");
-            }
+			GameActor? actor = _focusedActor;
+			if ((actor == null || !GodotObject.IsInstanceValid(actor)) && GetTree() != null)
+			{
+				actor = GetTree().GetFirstNodeInGroup("player") as GameActor;
+			}
 
-            _initialMonitoring = TriggerArea.Monitoring;
-            _initialMonitorable = TriggerArea.Monitorable;
-            TriggerArea.BodyEntered += OnBodyEntered;
-            TriggerArea.BodyExited += OnBodyExited;
+			if (actor == null || !GodotObject.IsInstanceValid(actor))
+			{
+				return null;
+			}
 
-            TriggerArea.CollisionLayer = TriggerCollisionLayer;
-            TriggerArea.CollisionMask = TriggerCollisionMask;
-            _initialCollisionLayer = TriggerArea.CollisionLayer;
-            _initialCollisionMask = TriggerArea.CollisionMask;
-        }
+			_cachedPlayerGrabArea = actor.GetNodeOrNull<Area2D>("GrabArea")
+				?? actor.GetNodeOrNull<Area2D>("SpineCharacter/GrabArea")
+				?? actor.FindChild("GrabArea", recursive: true, owned: false) as Area2D;
 
-        private void ApplyCollisionSettings()
-        {
-            CollisionLayer = BodyCollisionLayer;
-            CollisionMask = BodyCollisionMask;
-        }
+			return _cachedPlayerGrabArea;
+		}
 
-        private void OnBodyEntered(Node2D body)
-        {
-            if (body is GameActor actor)
-            {
-                // 只有在没有聚焦 actor 时才设置新的，避免多人模式下焦点被抢夺
-                if (_focusedActor == null)
-                {
-                    _focusedActor = actor;
-                }
-            }
-        }
+		private void UpdateOutlineHighlight(bool force = false)
+		{
+			ResolveOutlineHighlight();
+			if (_outlineMaterial == null)
+			{
+				return;
+			}
 
-        private void OnBodyExited(Node2D body)
-        {
-            if (_focusedActor == null)
-            {
-                return;
-            }
+			// 只高亮离玩家最近的那一件
+			bool shouldHighlight = false;
+			if (EnableGrabAreaOutlineHighlight && !_isPicked && TriggerArea != null && GodotObject.IsInstanceValid(TriggerArea))
+			{
+				var grabArea = ResolvePlayerGrabArea();
+				if (grabArea != null && GodotObject.IsInstanceValid(grabArea))
+				{
+					WorldItemEntity? closest = null;
+					float minDist = float.MaxValue;
+					foreach (var node in GetTree().GetNodesInGroup("world_items"))
+					{
+						if (node is WorldItemEntity item && item.EnableGrabAreaOutlineHighlight && !item._isPicked && item.TriggerArea != null && GodotObject.IsInstanceValid(item.TriggerArea))
+						{
+							if (item.TriggerArea.OverlapsArea(grabArea))
+							{
+								float dist = item.GlobalPosition.DistanceSquaredTo(grabArea.GlobalPosition);
+								if (dist < minDist)
+								{
+									minDist = dist;
+									closest = item;
+								}
+							}
+						}
+					}
+					shouldHighlight = ReferenceEquals(this, closest);
+				}
+			}
 
-            if (body == _focusedActor)
-            {
-                _focusedActor = null;
-            }
-        }
+			if (!force && _isOutlineHighlighted == shouldHighlight)
+			{
+				return;
+			}
 
-        private void HandlePickupRequest(GameActor actor)
-        {
-            if (!TryPickupByActor(actor))
-            {
-                EmitSignal(SignalName.ItemTransferFailed, this, actor);
-            }
-        }
+			_outlineMaterial.SetShaderParameter("outline_color", shouldHighlight ? HighlightOutlineColor : DefaultOutlineColor);
+			_isOutlineHighlighted = shouldHighlight;
+		}
 
-        private void DisableTriggerArea()
-        {
-            if (TriggerArea == null)
-            {
-                return;
-            }
+		public virtual void ApplyThrowImpulse(Vector2 velocity)
+		{
+			_pendingVelocity = velocity;
+			Velocity = velocity;
+		}
 
-            TriggerArea.Monitoring = false;
-            TriggerArea.Monitorable = false;
-            TriggerArea.CollisionLayer = 0;
-            TriggerArea.CollisionMask = 0;
-        }
+		/// <summary>
+		/// 供外部调用的拾取方法（如状态机或其他组件触发）
+		/// </summary>
+		public bool TryPickupByActor(GameActor actor)
+		{
+			if (_isPicked)
+			{
+				return false;
+			}
 
-        private void RestoreTriggerArea()
-        {
-            if (TriggerArea == null)
-            {
-                return;
-            }
+			if (!TryTransferToActor(actor))
+			{
+				return false;
+			}
 
-            TriggerArea.Monitoring = _initialMonitoring;
-            TriggerArea.Monitorable = _initialMonitorable;
-            TriggerArea.CollisionLayer = _initialCollisionLayer;
-            TriggerArea.CollisionMask = _initialCollisionMask;
-        }
+			ApplyItemEffects(actor, ItemEffectTrigger.OnPickup);
+			
+			// 同步玩家的左手物品和快捷栏显示
+			SyncPlayerHandAndQuickBar(actor);
 
-        private void OnPicked(GameActor actor)
-        {
-            if (_lastTransferredItem != null && _lastTransferredAmount > 0)
-            {
-                EmitSignal(SignalName.ItemTransferred, this, actor, _lastTransferredItem, _lastTransferredAmount);
-            }
+			// 检查是否为部分转移（地面仍有剩余物品）
+			if (Quantity > 0)
+			{
+				// 部分转移 - 发出信号但保持实体可交互
+				if (_lastTransferredItem != null && _lastTransferredAmount > 0)
+				{
+					EmitSignal(SignalName.ItemTransferred, this, actor, _lastTransferredItem, _lastTransferredAmount);
+				}
+				return true;
+			}
 
-            QueueFree();
-        }
+			// 完整转移 - 继续正常的拾取完成流程
+			_isPicked = true;
+			if (AutoDisableTriggerOnPickup)
+			{
+				// 使用 CallDeferred 避免在信号回调期间修改监控状态
+				CallDeferred(MethodName.DisableTriggerArea);
+			}
 
-        private void InitializeStack()
-        {
-            // 如果 CurrentStack 已经被 InitializeFromStack() 初始化，跳过
-            if (CurrentStack != null)
-            {
-                return;
-            }
-            
-            var definition = ResolveItemDefinition();
-            if (definition == null)
-            {
-                // 如果没有配置 ItemDefinition 或 ItemDefinitionResourcePath，
-                // 可能是通过 WorldItemSpawner 动态生成的，等待 InitializeFromStack() 调用
-                if (ItemDefinition == null && string.IsNullOrWhiteSpace(ItemDefinitionResourcePath))
-                {
-                    // 静默等待，不报错
-                    return;
-                }
-                
-                GameLogger.Error(nameof(WorldItemEntity), $"{Name} 无法解析物品定义，路径：{ItemDefinitionResourcePath}, 推断 Id：{ItemId}");
-                QueueFree();
-                return;
-            }
+			OnPicked(actor);
+			return true;
+		}
+		
+		/// <summary>
+		/// 同步玩家的左手物品和快捷栏显示
+		/// </summary>
+		private void SyncPlayerHandAndQuickBar(GameActor actor)
+		{
+			if (actor is SamplePlayer player)
+			{
+				// 同步左手物品
+				player.SyncLeftHandItemFromSlot();
+				player.UpdateHandItemVisual();
+				
+				// 刷新 BattleHUD 快捷栏显示
+				var battleHUD = UIManager.Instance?.GetUI<BattleHUD>("BattleHUD");
+				if (battleHUD == null)
+				{
+					battleHUD = GetTree().GetFirstNodeInGroup("ui") as BattleHUD;
+				}
+				
+				if (battleHUD != null)
+				{
+					battleHUD.CallDeferred("UpdateQuickBarDisplay");
+					int leftHandSlot = player.LeftHandSlotIndex >= 0 && player.LeftHandSlotIndex < 5
+						? player.LeftHandSlotIndex
+						: (player.InventoryComponent?.SelectedQuickBarSlot ?? -1);
+					if (leftHandSlot < 0 || leftHandSlot >= 5)
+					{
+						leftHandSlot = -1;
+					}
+					battleHUD.CallDeferred("UpdateHandSlotHighlight", leftHandSlot, -1);
+				}
+			}
+		}
 
-            Quantity = Math.Max(1, Quantity);
-            CurrentStack = new InventoryItemStack(definition, Quantity);
-        }
+		private void ResolveTriggerArea()
+		{
+			if (TriggerArea == null)
+			{
+				TriggerArea = GetNodeOrNull<Area2D>("TriggerArea")
+					?? GetNodeOrNull<Area2D>("CollisionArea")
+					?? throw new InvalidOperationException($"{Name} 缺少 TriggerArea、CollisionArea2D 或 CollisionArea 节点。");
+			}
 
-        private bool TryTransferToActor(GameActor actor)
-        {
-            var stack = CurrentStack;
-            if (stack == null)
-            {
-                return false;
-            }
+			_initialMonitoring = TriggerArea.Monitoring;
+			_initialMonitorable = TriggerArea.Monitorable;
+			TriggerArea.BodyEntered += OnBodyEntered;
+			TriggerArea.BodyExited += OnBodyExited;
 
-            var inventory = ResolveInventoryComponent(actor);
-            if (inventory == null)
-            {
-                GameLogger.Warn(nameof(WorldItemEntity), $"Actor {actor.Name} 缺少 PlayerInventoryComponent，无法拾取 {ItemId}。");
-                return false;
-            }
+			TriggerArea.CollisionLayer = TriggerCollisionLayer;
+			TriggerArea.CollisionMask = TriggerCollisionMask;
+			_initialCollisionLayer = TriggerArea.CollisionLayer;
+			_initialCollisionMask = TriggerArea.CollisionMask;
+		}
 
-            // 使用 AddItemSmart 优先添加到快捷栏，溢出放入背包
-            int accepted = inventory.AddItemSmart(stack.Item, stack.Quantity, showPopupIfFirstTime: true);
-            if (accepted <= 0)
-            {
-                GameLogger.Info(nameof(WorldItemEntity), $"Actor {actor.Name} 的物品栏已满，无法拾取 {ItemId}。");
-                return false;
-            }
+		private void ApplyCollisionSettings()
+		{
+			CollisionLayer = BodyCollisionLayer;
+			CollisionMask = BodyCollisionMask;
+		}
 
-            if (accepted < stack.Quantity)
-            {
-                stack.Remove(accepted);
-                Quantity = stack.Quantity;
-                _lastTransferredItem = stack.Item;
-                _lastTransferredAmount = accepted;
-                GameLogger.Info(nameof(WorldItemEntity), $"{actor.Name} 仅拾取了 {accepted} 个 {ItemId}，剩余 {Quantity} 个保留在地面。");
-                RestoreTriggerArea();
-                _isPicked = false;
-                return true;
-            }
+		private void OnBodyEntered(Node2D body)
+		{
+			if (body is GameActor actor)
+			{
+				// 只有在没有聚焦 actor 时才设置新的，避免多人模式下焦点被抢夺
+				if (_focusedActor == null)
+				{
+					_focusedActor = actor;
+				}
+			}
+		}
 
-            _lastTransferredItem = stack.Item;
-            _lastTransferredAmount = accepted;
-            CurrentStack = null;
-            Quantity = 0;
-            return true;
-        }
+		private void OnBodyExited(Node2D body)
+		{
+			if (_focusedActor == null)
+			{
+				return;
+			}
 
-        private ItemDefinition? ResolveItemDefinition()
-        {
-            if (ItemDefinition != null)
-            {
-                return ItemDefinition;
-            }
+			if (body == _focusedActor)
+			{
+				_focusedActor = null;
+			}
+		}
 
-            if (!string.IsNullOrWhiteSpace(ItemDefinitionResourcePath))
-            {
-                var loaded = ResourceLoader.Load<ItemDefinition>(ItemDefinitionResourcePath);
-                if (loaded != null)
-                {
-                    ItemDefinition = loaded;
-                    return ItemDefinition;
-                }
-            }
+		private void HandlePickupRequest(GameActor actor)
+		{
+			if (!TryPickupByActor(actor))
+			{
+				EmitSignal(SignalName.ItemTransferFailed, this, actor);
+			}
+		}
 
-            return ItemDefinition;
-        }
+		private void DisableTriggerArea()
+		{
+			if (TriggerArea == null)
+			{
+				return;
+			}
 
-        private string DeriveItemIdFromScene()
-        {
-            if (!string.IsNullOrEmpty(SceneFilePath))
-            {
-                return Path.GetFileNameWithoutExtension(SceneFilePath);
-            }
+			// 使用 SetDeferred 避免在信号回调期间修改监控状态
+			TriggerArea.SetDeferred(Area2D.PropertyName.Monitoring, false);
+			TriggerArea.SetDeferred(Area2D.PropertyName.Monitorable, false);
+			TriggerArea.CollisionLayer = 0;
+			TriggerArea.CollisionMask = 0;
+		}
 
-            return Name;
-        }
+		private void RestoreTriggerArea()
+		{
+			if (TriggerArea == null)
+			{
+				return;
+			}
 
-        private static PlayerInventoryComponent? ResolveInventoryComponent(GameActor actor)
-        {
-            if (actor == null)
-            {
-                return null;
-            }
+			// 使用 SetDeferred 避免在信号回调期间修改监控状态
+			TriggerArea.SetDeferred(Area2D.PropertyName.Monitoring, _initialMonitoring);
+			TriggerArea.SetDeferred(Area2D.PropertyName.Monitorable, _initialMonitorable);
+			TriggerArea.CollisionLayer = _initialCollisionLayer;
+			TriggerArea.CollisionMask = _initialCollisionMask;
+		}
 
-            if (actor is SamplePlayer samplePlayer && samplePlayer.InventoryComponent != null)
-            {
-                return samplePlayer.InventoryComponent;
-            }
+		private void OnPicked(GameActor actor)
+		{
+			if (_lastTransferredItem != null && _lastTransferredAmount > 0)
+			{
+				EmitSignal(SignalName.ItemTransferred, this, actor, _lastTransferredItem, _lastTransferredAmount);
+			}
 
-            var direct = actor.GetNodeOrNull<PlayerInventoryComponent>("Inventory");
-            if (direct != null)
-            {
-                return direct;
-            }
+			QueueFree();
+		}
 
-            return FindChildComponent<PlayerInventoryComponent>(actor);
-        }
+		private void InitializeStack()
+		{
+			// 如果 CurrentStack 已经被 InitializeFromStack() 初始化，跳过
+			if (CurrentStack != null)
+			{
+				return;
+			}
+			
+			var definition = ResolveItemDefinition();
+			if (definition == null)
+			{
+				// 如果没有配置 ItemDefinition 或 ItemDefinitionResourcePath，
+				// 可能是通过 WorldItemSpawner 动态生成的，等待 InitializeFromStack() 调用
+				if (ItemDefinition == null && string.IsNullOrWhiteSpace(ItemDefinitionResourcePath))
+				{
+					// 静默等待，不报错
+					return;
+				}
+				
+				GameLogger.Error(nameof(WorldItemEntity), $"{Name} 无法解析物品定义，路径：{ItemDefinitionResourcePath}, 推断 Id：{ItemId}");
+				QueueFree();
+				return;
+			}
 
-        private void ApplyItemEffects(GameActor actor, ItemEffectTrigger trigger)
-        {
-            ItemDefinition?.ApplyEffects(actor, trigger);
-        }
+			Quantity = Math.Max(1, Quantity);
+			CurrentStack = new InventoryItemStack(definition, Quantity);
+		}
 
-        private static T? FindChildComponent<T>(Node root) where T : Node
-        {
-            foreach (Node child in root.GetChildren())
-            {
-                if (child is T typed)
-                {
-                    return typed;
-                }
+		private bool TryTransferToActor(GameActor actor)
+		{
+			var stack = CurrentStack;
+			if (stack == null)
+			{
+				return false;
+			}
 
-                if (child.GetChildCount() > 0)
-                {
-                    var nested = FindChildComponent<T>(child);
-                    if (nested != null)
-                    {
-                        return nested;
-                    }
-                }
-            }
+			var inventory = ResolveInventoryComponent(actor);
+			if (inventory == null)
+			{
+				GameLogger.Warn(nameof(WorldItemEntity), $"Actor {actor.Name} 缺少 PlayerInventoryComponent，无法拾取 {ItemId}。");
+				return false;
+			}
 
-            return null;
-        }
-    }
+			// 使用 AddItemSmart 优先添加到快捷栏，溢出放入背包
+			int accepted = inventory.AddItemSmart(stack.Item, stack.Quantity, showPopupIfFirstTime: true);
+			if (accepted <= 0)
+			{
+				GameLogger.Info(nameof(WorldItemEntity), $"Actor {actor.Name} 的物品栏已满，无法拾取 {ItemId}。");
+				return false;
+			}
+
+			if (accepted < stack.Quantity)
+			{
+				stack.Remove(accepted);
+				Quantity = stack.Quantity;
+				_lastTransferredItem = stack.Item;
+				_lastTransferredAmount = accepted;
+				GameLogger.Info(nameof(WorldItemEntity), $"{actor.Name} 仅拾取了 {accepted} 个 {ItemId}，剩余 {Quantity} 个保留在地面。");
+				// 使用 CallDeferred 避免在信号回调期间修改监控状态
+				CallDeferred(MethodName.RestoreTriggerArea);
+				_isPicked = false;
+				return true;
+			}
+
+			_lastTransferredItem = stack.Item;
+			_lastTransferredAmount = accepted;
+			CurrentStack = null;
+			Quantity = 0;
+			return true;
+		}
+
+		private ItemDefinition? ResolveItemDefinition()
+		{
+			if (ItemDefinition != null)
+			{
+				return ItemDefinition;
+			}
+
+			if (!string.IsNullOrWhiteSpace(ItemDefinitionResourcePath))
+			{
+				var loaded = ResourceLoader.Load<ItemDefinition>(ItemDefinitionResourcePath);
+				if (loaded != null)
+				{
+					ItemDefinition = loaded;
+					return ItemDefinition;
+				}
+			}
+
+			return ItemDefinition;
+		}
+
+		private string DeriveItemIdFromScene()
+		{
+			if (!string.IsNullOrEmpty(SceneFilePath))
+			{
+				return Path.GetFileNameWithoutExtension(SceneFilePath);
+			}
+
+			return Name;
+		}
+
+		private static PlayerInventoryComponent? ResolveInventoryComponent(GameActor actor)
+		{
+			if (actor == null)
+			{
+				return null;
+			}
+
+			if (actor is SamplePlayer samplePlayer && samplePlayer.InventoryComponent != null)
+			{
+				return samplePlayer.InventoryComponent;
+			}
+
+			var direct = actor.GetNodeOrNull<PlayerInventoryComponent>("Inventory");
+			if (direct != null)
+			{
+				return direct;
+			}
+
+			return FindChildComponent<PlayerInventoryComponent>(actor);
+		}
+
+		private void ApplyItemEffects(GameActor actor, ItemEffectTrigger trigger)
+		{
+			ItemDefinition?.ApplyEffects(actor, trigger);
+		}
+
+		private static T? FindChildComponent<T>(Node root) where T : Node
+		{
+			foreach (Node child in root.GetChildren())
+			{
+				if (child is T typed)
+				{
+					return typed;
+				}
+
+				if (child.GetChildCount() > 0)
+				{
+					var nested = FindChildComponent<T>(child);
+					if (nested != null)
+					{
+						return nested;
+					}
+				}
+			}
+
+			return null;
+		}
+	}
 }

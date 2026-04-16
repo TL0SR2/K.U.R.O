@@ -35,6 +35,10 @@ window/stretch/mode="canvas_items"
 
 project/assembly_name="Kuros"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/csv-data-importer/plugin.cfg")
+
 [input]
 
 ui_cancel={
@@ -136,6 +140,13 @@ item_use={
 [kuro]
 
 logging/enable_file_logging=true
+
+[layer_names]
+
+2d_physics/layer_1="Environment"
+2d_physics/layer_2="Enemies"
+2d_physics/layer_3="Player"
+2d_physics/layer_4="ItemGhost"
 
 [rendering]
 

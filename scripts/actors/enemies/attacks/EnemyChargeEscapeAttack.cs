@@ -1,4 +1,5 @@
 using Godot;
+using Kuros.UI;
 using Kuros.Utils;
 
 namespace Kuros.Actors.Enemies.Attacks
@@ -9,15 +10,18 @@ namespace Kuros.Actors.Enemies.Attacks
     public partial class EnemyChargeEscapeAttack : EnemyChargeGrabAttack
     {
         [Export(PropertyHint.Range, "1,20,1")]
-        public int RequiredLeftInputs = 4;
+        public int RequiredLeftInputs = 3;
 
         [Export(PropertyHint.Range, "1,20,1")]
-        public int RequiredRightInputs = 4;
+        public int RequiredRightInputs = 3;
 
 		private int _leftCount;
 		private int _rightCount;
-	private float _escapeTimer;
 		private bool _escapeResolved;
+		private bool _areEscapeCountersCleared = true;
+		private EscapeHUD? _escapeHud;
+
+		public override bool AreEscapeCountersCleared => _areEscapeCountersCleared;
 
 	public override void _Ready()
         {
@@ -37,25 +41,29 @@ namespace Kuros.Actors.Enemies.Attacks
 		{
             _leftCount = 0;
             _rightCount = 0;
-			_escapeTimer = EscapeWindowSeconds;
 			_escapeResolved = false;
+			_areEscapeCountersCleared = false;
+			_escapeHud = ResolveEscapeHud(player);
+			_escapeHud?.ShowSequence(RequiredLeftInputs, RequiredRightInputs, EscapeWindowSeconds);
         }
 
 		protected override void UpdateEscapeSequence(SamplePlayer player, double delta)
         {
 			if (_escapeResolved) return;
 
-            _escapeTimer -= (float)delta;
+			GD.Print($"[EscapeSeq] IsEvaluatingEscape={IsEvaluatingEscape} AreEscapeCountersCleared={AreEscapeCountersCleared}  timer={EscapeTimerRemaining:F2}s  L={_leftCount}/{RequiredLeftInputs}  R={_rightCount}/{RequiredRightInputs}");
 
-            if (Input.IsActionJustPressed("move_left"))
+			if (player.ConsumeControlledActionJustPressed("move_left"))
             {
                 _leftCount++;
             }
 
-            if (Input.IsActionJustPressed("move_right"))
+			if (player.ConsumeControlledActionJustPressed("move_right"))
             {
                 _rightCount++;
             }
+
+			_escapeHud?.UpdateSequence(_leftCount, _rightCount, EscapeTimerRemaining);
 
 			if (_leftCount >= RequiredLeftInputs && _rightCount >= RequiredRightInputs)
 			{
@@ -63,14 +71,38 @@ namespace Kuros.Actors.Enemies.Attacks
 				_escapeResolved = true;
 				ResolveEscape(true);
 			}
-			else if (_escapeTimer <= 0f)
+		}
+
+		protected override void OnEscapeSequenceFinished(SamplePlayer player, bool escaped)
+		{
+			_leftCount = 0;
+			_rightCount = 0;
+			_areEscapeCountersCleared = true;
+			_escapeHud?.HideSequence();
+			_escapeHud = null;
+		}
+
+		protected override void OnAttackFinished()
+		{
+			base.OnAttackFinished();
+			if (!IsEvaluatingEscape)
 			{
-				GameLogger.Info(nameof(EnemyChargeEscapeAttack), $"{player.Name} failed to escape (inputs L:{_leftCount}/R:{_rightCount}).");
-				_escapeResolved = true;
-				ResolveEscape(false);
+				_leftCount = 0;
+				_rightCount = 0;
+				_areEscapeCountersCleared = true;
+				_escapeHud?.HideSequence();
+				_escapeHud = null;
 			}
 		}
 
-		protected override void OnEscapeSequenceFinished(SamplePlayer player, bool escaped) { }
+		private EscapeHUD? ResolveEscapeHud(SamplePlayer player)
+		{
+			if (_escapeHud != null && GodotObject.IsInstanceValid(_escapeHud))
+			{
+				return _escapeHud;
+			}
+
+			return player.GetNodeOrNull<EscapeHUD>("EscapeHud");
+		}
 	}
 }

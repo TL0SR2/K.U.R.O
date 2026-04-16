@@ -16,14 +16,25 @@ namespace Kuros.UI
 	[Export] public Label PlayerStatsLabel { get; private set; } = null!;
 	[Export] public Label InstructionsLabel { get; private set; } = null!;
 	[Export] public ProgressBar HealthBar { get; private set; } = null!;
+	// 生命值条内部用于遮罩数值的进度条（新节点），不改变 HealthBar 本身的贴图
+	[Export] public TextureProgressBar? HealthFillBar { get; private set; } = null!;
+	// 叠加在生命条上的数字显示
+	[Export] public Label? HealthValueLabel { get; private set; } = null!;
 	[Export] public Label ScoreLabel { get; private set; } = null!;
 	[Export] public Button PauseButton { get; private set; } = null!;
 	[Export] public Label GoldLabel { get; private set; } = null!;
-	[Export] public Control MinimapContainer { get; private set; } = null!;
-	[Export] public ColorRect PlayerMarker { get; private set; } = null!;
+
+		[ExportCategory("Styles")]
+		// 快捷物品栏整体面板样式（例如使用武器栏底图做 StyleBoxTexture）
+		[Export] public StyleBox? QuickBarPanelStyle { get; set; }
+		// 金币文本样式（可配合金币图标背景）
+		[Export] public StyleBox? GoldLabelStyle { get; set; }
+		// 暂停键按钮样式（例如使用“暂停键底”资源）
+		[Export] public StyleBox? PauseButtonStyle { get; set; }
 
 		[ExportCategory("Default Items")]
 		[Export] public ItemDefinition? DefaultSwordItem { get; set; } // 默认小木剑物品定义
+		[Export] public bool SpawnDefaultSwordInQuickBar { get; set; } = false;
 		private const string DefaultSwordItemPath = "res://data/DefaultSwordItem.tres";
 
 		// 当前显示的数据
@@ -40,12 +51,15 @@ namespace Kuros.UI
 		private readonly Label[] _quickSlotLabels = new Label[5];
 		private readonly Panel[] _quickSlotPanels = new Panel[5];
 		private readonly TextureRect[] _quickSlotIcons = new TextureRect[5];
+		// 武器栏框贴图样式：未选中 / 选中（用于 UpdateSlotPanelStyle）
+		private StyleBoxTexture? _quickSlotStyleNormal;
+		private StyleBoxTexture? _quickSlotStyleSelected;
 		
 		// 小地图相关
 		private Vector2 _mapSize = new Vector2(2000, 1500); // 地图总大小（可以根据实际地图调整）
 		private Vector2 _minimapSize = new Vector2(200, 200); // 小地图显示大小
-		
-		// 颜色定义
+
+		// 颜色定义（双手装备等）
 		private static readonly Color LeftHandColor = new Color(0.2f, 0.5f, 1.0f, 1.0f); // 蓝色
 		private static readonly Color RightHandColor = new Color(1.0f, 0.8f, 0.0f, 1.0f); // 黄色
 		private static readonly Color DefaultColor = new Color(0.3f, 0.3f, 0.3f, 1.0f); // 默认灰色
@@ -75,6 +89,18 @@ namespace Kuros.UI
 				HealthBar = GetNodeOrNull<ProgressBar>("HealthBar");
 			}
 
+			if (HealthFillBar == null)
+			{
+				HealthFillBar = GetNodeOrNull<TextureProgressBar>("HealthBar/HealthFillBar");
+			}
+
+			ConfigureHealthFillBar();
+
+			if (HealthValueLabel == null)
+			{
+				HealthValueLabel = GetNodeOrNull<Label>("HealthBar/HealthValueLabel");
+			}
+
 			if (ScoreLabel == null)
 			{
 				ScoreLabel = GetNodeOrNull<Label>("ScoreLabel");
@@ -87,18 +113,7 @@ namespace Kuros.UI
 
 			if (GoldLabel == null)
 			{
-				GoldLabel = GetNodeOrNull<Label>("GoldLabel");
-			}
-
-			// 初始化小地图引用
-			if (MinimapContainer == null)
-			{
-				MinimapContainer = GetNodeOrNull<Control>("MinimapPanel/MinimapContainer");
-			}
-
-			if (PlayerMarker == null)
-			{
-				PlayerMarker = GetNodeOrNull<ColorRect>("MinimapPanel/MinimapContainer/PlayerMarker");
+				GoldLabel = GetNodeOrNull<Label>("GoldContainer/GoldLabel");
 			}
 
 			// 使用 Godot 原生 Connect 方法连接信号，在导出版本中更可靠
@@ -113,6 +128,9 @@ namespace Kuros.UI
 
 			// 缓存快捷栏Label引用（必须在初始化物品栏之前）
 			CacheQuickBarLabels();
+
+			// 应用可自定义样式（快捷物品栏、金币、暂停键）
+			ApplyCustomStyles();
 
 			// 初始化物品栏
 			InitializeInventory();
@@ -157,12 +175,8 @@ namespace Kuros.UI
 				{
 					GD.PrintErr($"CacheQuickBarLabels: Failed to find QuickSlotPanel{i + 1}");
 				}
-				else
-				{
-					// 初始化默认边框颜色
-					UpdateSlotBorderColor(i, DefaultColor);
-				}
-				
+				// 槽位样式在 ApplyCustomStyles 中统一用武器栏框贴图设置
+
 				if (_quickSlotIcons[i] == null)
 				{
 					GD.PrintErr($"CacheQuickBarLabels: Failed to find QuickSlotIcon{i + 1}");
@@ -193,25 +207,28 @@ namespace Kuros.UI
 		_quickBarContainer.SlotChanged += OnQuickBarSlotChanged;
 		_quickBarContainer.InventoryChanged += OnQuickBarChanged;
 
-			// 在快捷栏1（索引0）放置默认小木剑占位符
-			ItemDefinition? swordItem = DefaultSwordItem;
-			
-			// 如果未设置，尝试加载默认资源
-			if (swordItem == null)
+			if (SpawnDefaultSwordInQuickBar)
 			{
-				swordItem = GD.Load<ItemDefinition>(DefaultSwordItemPath);
-			}
-			
-			if (swordItem != null)
-			{
-				_quickBarContainer.TryAddItemToSlot(swordItem, 1, 0);
-				
-				// 立即更新快捷栏1的显示
-				CallDeferred(MethodName.UpdateQuickBarSlot, 0);
-			}
-			else
-			{
-				GD.PrintErr("InitializeInventory: DefaultSwordItem is null and could not load from resource file. Please set DefaultSwordItem in the inspector or create the resource file.");
+				// 可选：在快捷栏1（索引0）放置默认小木剑占位符
+				ItemDefinition? swordItem = DefaultSwordItem;
+
+				// 如果未设置，尝试加载默认资源
+				if (swordItem == null)
+				{
+					swordItem = GD.Load<ItemDefinition>(DefaultSwordItemPath);
+				}
+
+				if (swordItem != null)
+				{
+					_quickBarContainer.TryAddItemToSlot(swordItem, 1, 0);
+
+					// 立即更新快捷栏1的显示
+					CallDeferred(MethodName.UpdateQuickBarSlot, 0);
+				}
+				else
+				{
+					GD.PrintErr("InitializeInventory: DefaultSwordItem is null and could not load from resource file. Please set DefaultSwordItem in the inspector or create the resource file.");
+				}
 			}
 			
 			// 初始化空白道具：填充快捷栏和物品栏的空槽位
@@ -313,52 +330,28 @@ namespace Kuros.UI
 		}
 		
 		/// <summary>
-		/// 更新快捷栏槽位的边框颜色
+		/// 更新快捷栏槽位面板样式：未选中用武器栏框（未选中），选中用武器栏框（选中）
 		/// </summary>
-		private void UpdateSlotBorderColor(int slotIndex, Color color)
+		private void UpdateSlotPanelStyle(int slotIndex, bool selected)
 		{
 			if (slotIndex < 0 || slotIndex >= 5) return;
 			if (_quickSlotPanels[slotIndex] == null) return;
-			
-			// 使用 StyleBoxFlat 来设置边框颜色
-			var styleBox = new StyleBoxFlat();
-			styleBox.BgColor = new Color(0.1f, 0.1f, 0.1f, 0.5f); // 背景色
-			styleBox.BorderColor = color;
-			styleBox.BorderWidthLeft = 3;
-			styleBox.BorderWidthTop = 3;
-			styleBox.BorderWidthRight = 3;
-			styleBox.BorderWidthBottom = 3;
-			styleBox.CornerRadiusTopLeft = 4;
-			styleBox.CornerRadiusTopRight = 4;
-			styleBox.CornerRadiusBottomLeft = 4;
-			styleBox.CornerRadiusBottomRight = 4;
-			
-			_quickSlotPanels[slotIndex].AddThemeStyleboxOverride("panel", styleBox);
+			var style = selected ? _quickSlotStyleSelected : _quickSlotStyleNormal;
+			if (style == null) return;
+			_quickSlotPanels[slotIndex].AddThemeStyleboxOverride("panel", style);
 		}
-		
+
 		/// <summary>
-		/// 更新左右手选择的快捷栏边框颜色
+		/// 更新左右手选择的快捷栏高亮（武器栏框选中/未选中贴图）
 		/// </summary>
-		/// <param name="leftHandSlotIndex">左手选择的槽位索引（1-4，-1表示未选择）</param>
-		/// <param name="rightHandSlotIndex">右手选择的槽位索引（0，固定为小木剑）</param>
-		public void UpdateHandSlotHighlight(int leftHandSlotIndex, int rightHandSlotIndex = 0)
+		/// <param name="leftHandSlotIndex">左手选择的槽位索引（0-4，-1表示未选择）</param>
+		/// <param name="rightHandSlotIndex">右手选择的槽位索引（-1表示不高亮右手）</param>
+		public void UpdateHandSlotHighlight(int leftHandSlotIndex, int rightHandSlotIndex = -1)
 		{
-			// 重置所有槽位为默认颜色
 			for (int i = 0; i < 5; i++)
 			{
-				UpdateSlotBorderColor(i, DefaultColor);
-			}
-			
-			// 设置右手颜色（槽位0，小木剑）
-			if (rightHandSlotIndex >= 0 && rightHandSlotIndex < 5)
-			{
-				UpdateSlotBorderColor(rightHandSlotIndex, RightHandColor);
-			}
-			
-			// 设置左手颜色（槽位1-4），无论槽位是否有物品都显示蓝色
-			if (leftHandSlotIndex >= 1 && leftHandSlotIndex < 5)
-			{
-				UpdateSlotBorderColor(leftHandSlotIndex, LeftHandColor);
+				bool selected = (i == rightHandSlotIndex && rightHandSlotIndex >= 0) || (i == leftHandSlotIndex && leftHandSlotIndex >= 0 && leftHandSlotIndex < 5);
+				UpdateSlotPanelStyle(i, selected);
 			}
 		}
 
@@ -374,10 +367,11 @@ namespace Kuros.UI
 				return;
 			}
 			
-			// 填充快捷栏空槽位（跳过索引0，因为是小木剑）
+			// 填充快捷栏空槽位。若启用默认小木剑则跳过索引0。
 			if (_quickBarContainer != null)
 			{
-				for (int i = 1; i < 5; i++)
+				int startIndex = SpawnDefaultSwordInQuickBar ? 1 : 0;
+				for (int i = startIndex; i < 5; i++)
 				{
 					var stack = _quickBarContainer.GetStack(i);
 					if (stack == null || stack.IsEmpty)
@@ -417,9 +411,11 @@ namespace Kuros.UI
 				// 注意：使用 CallDeferred 确保在快捷栏连接完成后再初始化
 				player.CallDeferred(SamplePlayer.MethodName.InitializeLeftHandSelection);
 				
-				// 延迟更新高亮，确保初始化完成后再显示
-				int clampedIndex = Mathf.Clamp(player.LeftHandSlotIndex, 1, 4);
-				CallDeferred(MethodName.UpdateHandSlotHighlight, clampedIndex, 0);
+				// 延迟更新高亮，保留未选择状态（-1），避免把第一格误高亮。
+				int highlightIndex = (player.LeftHandSlotIndex >= 0 && player.LeftHandSlotIndex < 5)
+					? player.LeftHandSlotIndex
+					: -1;
+				CallDeferred(MethodName.UpdateHandSlotHighlight, highlightIndex, -1);
 			}
 			else
 			{
@@ -456,18 +452,156 @@ namespace Kuros.UI
 
 		private void UpdateDisplay()
 		{
+			int safeMaxHealth = Mathf.Max(1, _maxHealth);
+			int safeHealth = Mathf.Clamp(_currentHealth, 0, safeMaxHealth);
+
 			if (HealthBar != null)
 			{
-				HealthBar.MaxValue = _maxHealth;
-				HealthBar.Value = _currentHealth;
+				// 保持 HealthBar 作为你在编辑器中布置好的容器/图标，不去修改其贴图
+				HealthBar.MaxValue = safeMaxHealth;
+				HealthBar.Value = safeHealth;
+			}
+
+			// 使用单独的遮罩进度条来表现生命值长度
+			if (HealthFillBar != null)
+			{
+				HealthFillBar.MinValue = 0;
+				HealthFillBar.MaxValue = safeMaxHealth;
+				HealthFillBar.Value = safeHealth;
+			}
+
+			// 在生命条中央叠加数值显示
+			if (HealthValueLabel != null)
+			{
+				HealthValueLabel.Text = $"{safeHealth}/{safeMaxHealth}";
 			}
 			if (ScoreLabel != null)
 			{
-				ScoreLabel.Text = $"Score: {_score}";
+				// 只显示数字，便于与图标/背景组合
+				ScoreLabel.Text = $"{_score}";
 			}
-			if (PlayerStatsLabel != null)
+			// PlayerStatsLabel 保留原逻辑用于调试/回退需要
+		}
+
+		private void ConfigureHealthFillBar()
+		{
+			if (HealthFillBar == null)
 			{
-				PlayerStatsLabel.Text = $"Player HP: {_currentHealth}/{_maxHealth}\nScore: {_score}";
+				return;
+			}
+
+			HealthFillBar.FillMode = (int)TextureProgressBar.FillModeEnum.LeftToRight;
+			HealthFillBar.MinValue = 0;
+			HealthFillBar.MaxValue = Mathf.Max(1, _maxHealth);
+			HealthFillBar.Value = Mathf.Clamp(_currentHealth, 0, Mathf.Max(1, _maxHealth));
+		}
+
+		/// <summary>
+		/// 应用战斗 UI 的可自定义样式：快捷物品栏、金币文本、暂停键按钮等。
+		/// 仅在对应 StyleBox 被设置时才覆盖，避免破坏你在编辑器中已有的视觉配置。
+		/// </summary>
+		private void ApplyCustomStyles()
+		{
+			// 快捷物品栏整体面板：武器栏底（与金币/暂停同样方式，默认贴图）
+			var quickBarPanel = GetNodeOrNull<Panel>("QuickBarPanel");
+			if (quickBarPanel != null)
+			{
+				StyleBox? panelStyle = QuickBarPanelStyle;
+				if (panelStyle == null)
+				{
+					var tex = GD.Load<Texture2D>("res://resources/ui/武器栏底.png");
+					if (tex != null)
+					{
+						var stb = new StyleBoxTexture();
+						stb.Texture = tex;
+						panelStyle = stb;
+					}
+				}
+				if (panelStyle != null)
+					quickBarPanel.AddThemeStyleboxOverride("panel", panelStyle);
+			}
+
+			// 每个快捷槽：武器栏框（未选中）/ 武器栏框（选中）
+			var texNormal = GD.Load<Texture2D>("res://resources/ui/武器栏框（未选中）.png");
+			var texSelected = GD.Load<Texture2D>("res://resources/ui/武器栏框（选中）.png");
+			if (texNormal != null)
+			{
+				_quickSlotStyleNormal = new StyleBoxTexture();
+				_quickSlotStyleNormal.Texture = texNormal;
+			}
+			if (texSelected != null)
+			{
+				_quickSlotStyleSelected = new StyleBoxTexture();
+				_quickSlotStyleSelected.Texture = texSelected;
+			}
+			for (int i = 0; i < 5; i++)
+			{
+				UpdateSlotPanelStyle(i, false);
+			}
+
+			// 金币文本样式
+			if (GoldLabel != null && GoldLabelStyle != null)
+			{
+				GoldLabel.AddThemeStyleboxOverride("normal", GoldLabelStyle);
+			}
+
+			// 金币图标：使用 金币.png，点采样避免透明边灰圈
+			var goldIcon = GetNodeOrNull<TextureRect>("GoldContainer/GoldIcon");
+			if (goldIcon != null)
+			{
+				goldIcon.TextureFilter = CanvasItem.TextureFilterEnum.Nearest;
+			}
+
+			// 暂停键：透明 StyleBox + 用 TextureRect 显示 暂停.png 并设点采样，去掉透明边缘的灰圈
+			if (PauseButton != null)
+			{
+				Texture2D? pauseTex = null;
+				if (PauseButtonStyle is StyleBoxTexture st && st.Texture != null)
+				{
+					pauseTex = st.Texture;
+				}
+				else
+				{
+					pauseTex = GD.Load<Texture2D>("res://resources/ui/暂停.png");
+				}
+
+				var transparentStyle = new StyleBoxFlat();
+				transparentStyle.BgColor = new Color(0, 0, 0, 0);
+				transparentStyle.BorderWidthLeft = 0;
+				transparentStyle.BorderWidthTop = 0;
+				transparentStyle.BorderWidthRight = 0;
+				transparentStyle.BorderWidthBottom = 0;
+
+				PauseButton.AddThemeStyleboxOverride("normal", transparentStyle);
+				PauseButton.AddThemeStyleboxOverride("hover", transparentStyle);
+				PauseButton.AddThemeStyleboxOverride("pressed", transparentStyle);
+				PauseButton.AddThemeStyleboxOverride("disabled", transparentStyle);
+				PauseButton.AddThemeStyleboxOverride("focus", transparentStyle);
+
+				if (pauseTex != null)
+				{
+					// 不再改按钮的尺寸和位置，完全沿用场景里 PauseButton 的布局（= 节点预览中的大小）
+					PauseButton.Icon = null;
+					var iconRect = PauseButton.GetNodeOrNull<TextureRect>("PauseIconRect");
+					if (iconRect == null)
+					{
+						iconRect = new TextureRect
+						{
+							Name = "PauseIconRect",
+							MouseFilter = Control.MouseFilterEnum.Ignore,
+							ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+							StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
+						};
+						PauseButton.AddChild(iconRect);
+					}
+					iconRect.Texture = pauseTex;
+					iconRect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+					iconRect.OffsetLeft = 0;
+					iconRect.OffsetTop = 0;
+					iconRect.OffsetRight = 0;
+					iconRect.OffsetBottom = 0;
+					iconRect.TextureFilter = CanvasItem.TextureFilterEnum.Nearest;
+				}
 			}
 		}
 
@@ -479,6 +613,10 @@ namespace Kuros.UI
 			if (actor is SamplePlayer samplePlayer)
 			{
 				_player = samplePlayer;
+
+				// 使用 C# 事件驱动血量/分数更新，避免仅依赖未触发的 Godot 信号。
+				samplePlayer.StatsUpdated -= OnPlayerStatsUpdated;
+				samplePlayer.StatsUpdated += OnPlayerStatsUpdated;
 				
 				// 连接玩家状态变化信号
 				if (!samplePlayer.IsConnected(SamplePlayer.SignalName.StatsChanged, new Callable(this, MethodName.OnPlayerStatsChanged)))
@@ -494,6 +632,9 @@ namespace Kuros.UI
 				
 				// 初始化金币显示
 				UpdateGoldDisplay(samplePlayer.GetGold());
+
+				// 绑定时立即刷新一次生命值，避免必须等待下一次事件才更新。
+				UpdateStats(samplePlayer.CurrentHealth, samplePlayer.MaxHealth, samplePlayer.Score);
 				
 				// 连接玩家物品栏组件
 				ConnectPlayerInventory(samplePlayer);
@@ -507,6 +648,8 @@ namespace Kuros.UI
 		{
 			if (player is SamplePlayer samplePlayer)
 			{
+				samplePlayer.StatsUpdated -= OnPlayerStatsUpdated;
+
 				if (samplePlayer.IsConnected(SamplePlayer.SignalName.StatsChanged, new Callable(this, MethodName.OnPlayerStatsChanged)))
 				{
 					samplePlayer.StatsChanged -= OnPlayerStatsChanged;
@@ -536,7 +679,6 @@ namespace Kuros.UI
 		}
 
 		private SamplePlayer? _player;
-		private Vector2 _lastPlayerPosition = Vector2.Zero; // 上次的玩家位置，用于小地图更新优化
 		
 		/// <summary>
 		/// 设置玩家引用（用于获取最大生命值等属性）
@@ -549,8 +691,6 @@ namespace Kuros.UI
 				int maxHealth = _player.MaxHealth;
 				int score = _player is IPlayerStatsSource statsSource ? statsSource.Score : _score;
 				UpdateStats(_player.CurrentHealth, maxHealth, score);
-				// 重置位置缓存，强制下次更新
-				_lastPlayerPosition = Vector2.Zero;
 			}
 		}
 
@@ -563,6 +703,11 @@ namespace Kuros.UI
 			int maxHealth = _player?.MaxHealth ?? 100;
 			UpdateStats(health, maxHealth, score);
 		}
+
+		private void OnPlayerStatsUpdated(int health, int maxHealth, int score)
+		{
+			UpdateStats(health, maxHealth, score);
+		}
 		
 		private void OnPlayerGoldChanged(int gold)
 		{
@@ -573,7 +718,7 @@ namespace Kuros.UI
 		{
 			if (GoldLabel != null)
 			{
-				GoldLabel.Text = $"金币: {gold}";
+				GoldLabel.Text = $"{gold}";
 			}
 		}
 
@@ -594,81 +739,6 @@ namespace Kuros.UI
 					GetViewport().SetInputAsHandled();
 				}
 			}
-		}
-
-		public override void _Process(double delta)
-		{
-			base._Process(delta);
-			UpdateMinimap();
-		}
-
-		/// <summary>
-		/// 更新小地图上的玩家位置
-		/// </summary>
-		private void UpdateMinimap()
-		{
-			if (MinimapContainer == null || PlayerMarker == null)
-			{
-				return;
-			}
-
-			// 获取玩家位置
-			Vector2 playerPosition = Vector2.Zero;
-			Node2D? playerNode = null;
-			
-			// 如果缓存的玩家引用有效，使用它
-			if (_player != null && GodotObject.IsInstanceValid(_player))
-			{
-				playerNode = _player;
-				playerPosition = _player.GlobalPosition;
-			}
-			else
-			{
-				// 如果玩家不存在，尝试从场景中查找并缓存
-				playerNode = GetTree().GetFirstNodeInGroup("player") as Node2D;
-				if (playerNode != null)
-				{
-					playerPosition = playerNode.GlobalPosition;
-					// 缓存玩家引用（如果是 SamplePlayer）
-					if (playerNode is SamplePlayer samplePlayer)
-					{
-						_player = samplePlayer;
-					}
-				}
-				else
-				{
-					// 没有找到玩家，提前返回
-					return;
-				}
-			}
-
-			// 位置变化检测：如果位置没有改变，提前返回
-			if (playerPosition == _lastPlayerPosition)
-			{
-				return;
-			}
-			
-			// 更新缓存的位置
-			_lastPlayerPosition = playerPosition;
-
-			// 将玩家世界坐标转换为小地图坐标
-			// 假设地图范围从 (0, 0) 到 _mapSize
-			float normalizedX = Mathf.Clamp(playerPosition.X / _mapSize.X, 0.0f, 1.0f);
-			float normalizedY = Mathf.Clamp(playerPosition.Y / _mapSize.Y, 0.0f, 1.0f);
-
-			// 获取小地图容器的实际大小
-			var containerSize = MinimapContainer.Size;
-			if (containerSize.X <= 0 || containerSize.Y <= 0)
-			{
-				return;
-			}
-
-			// 计算玩家标记在小地图中的位置
-			float markerX = normalizedX * containerSize.X;
-			float markerY = normalizedY * containerSize.Y;
-
-			// 更新玩家标记位置（相对于小地图容器）
-			PlayerMarker.Position = new Vector2(markerX - PlayerMarker.Size.X / 2, markerY - PlayerMarker.Size.Y / 2);
 		}
 	}
 }

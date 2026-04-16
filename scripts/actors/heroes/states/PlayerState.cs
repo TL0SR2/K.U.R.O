@@ -3,6 +3,7 @@ using System;
 using Kuros.Systems.FSM;
 using Kuros.Core;
 using Kuros.Managers;
+using Kuros.Actors.Heroes;
 
 namespace Kuros.Actors.Heroes.States
 {
@@ -10,9 +11,46 @@ namespace Kuros.Actors.Heroes.States
     {
         protected SamplePlayer Player => (SamplePlayer)Actor;
         
+        /// <summary>
+        /// 播放动画（自动检测是使用 AnimationPlayer 还是 Spine 动画）
+        /// 如果是 MainCharacter，使用 Spine 动画；否则使用 AnimationPlayer
+        /// </summary>
+        protected void PlayAnimation(string animName, bool loop = true, float timeScale = 1.0f)
+        {
+            if (Player is MainCharacter mainChar)
+            {
+                // 使用 Spine 动画
+                mainChar.PlaySpineAnimation(animName, loop, timeScale);
+            }
+            else if (Actor.AnimPlayer != null)
+            {
+                // 使用 AnimationPlayer
+                if (Actor.AnimPlayer.HasAnimation(animName))
+                {
+                    Actor.AnimPlayer.Play(animName);
+                    Actor.AnimPlayer.SpeedScale = timeScale;
+                    var anim = Actor.AnimPlayer.GetAnimation(animName);
+                    if (anim != null)
+                    {
+                        anim.LoopMode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
+                    }
+                }
+            }
+        }
+        
         protected Vector2 GetMovementInput()
         {
-            return Input.GetVector("move_left", "move_right", "move_forward", "move_back");
+            return Player.GetControlledMovementInput();
+        }
+
+        protected bool IsActionPressed(string actionName)
+        {
+            return Player.IsControlledActionPressed(actionName);
+        }
+
+        protected bool IsActionJustPressed(string actionName)
+        {
+            return Player.ConsumeControlledActionJustPressed(actionName);
         }
         
         /// <summary>

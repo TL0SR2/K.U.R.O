@@ -6,6 +6,10 @@ namespace Kuros.Actors.Heroes.States
 {
 	public partial class PlayerAttackState : PlayerState
 	{
+
+		public float AttackAnimationSpeed = 1.2f;
+		private float _originalSpeedScale = 1.0f;
+		
 		private readonly List<PlayerAttackTemplate> _attackTemplates = new();
 		private PlayerAttackTemplate? _activeTemplate;
 
@@ -31,6 +35,15 @@ namespace Kuros.Actors.Heroes.States
 		public override void Enter()
 		{
 			Player.Velocity = Vector2.Zero;
+			AlignFacingToInput();
+			
+			// Save original speed scale before modifying
+			if (Actor.AnimPlayer != null)
+			{
+				_originalSpeedScale = Actor.AnimPlayer.SpeedScale;
+				// Set animation playback speed only for attack animation
+				Actor.AnimPlayer.SpeedScale = AttackAnimationSpeed;
+			}
 
 			if (!TryStartTemplateAttack())
 			{
@@ -39,9 +52,15 @@ namespace Kuros.Actors.Heroes.States
 		}
 
 		public override void Exit()
-			{
+		{
 			_activeTemplate?.Cancel(clearCooldown: true);
 			_activeTemplate = null;
+			
+			// Restore original animation speed when leaving attack state
+			if (Actor.AnimPlayer != null)
+			{
+				Actor.AnimPlayer.SpeedScale = _originalSpeedScale;
+			}
 		}
 
 		public override void PhysicsUpdate(double delta)
@@ -59,8 +78,7 @@ namespace Kuros.Actors.Heroes.States
 
 			if (!_activeTemplate.IsRunning)
 			{
-				_activeTemplate = null;
-				 ChangeState("Idle");
+				ChangeState("Idle");
 			}
 		}
 		
@@ -75,6 +93,26 @@ namespace Kuros.Actors.Heroes.States
 			foreach (var template in _attackTemplates)
 			{
 				template.SetTriggerSourceState(requestedState);
+				if (!template.HasWeaponRequirement || !template.IsWeaponRequirementSatisfied())
+				{
+					continue;
+				}
+
+				if (template.TryStart(checkInput: false))
+				{
+					_activeTemplate = template;
+					return true;
+				}
+			}
+
+			foreach (var template in _attackTemplates)
+			{
+				template.SetTriggerSourceState(requestedState);
+				if (template.HasWeaponRequirement)
+				{
+					continue;
+				}
+
 				if (template.TryStart(checkInput: false))
 				{
 					_activeTemplate = template;
@@ -83,6 +121,15 @@ namespace Kuros.Actors.Heroes.States
 			}
 
 			return false;
+		}
+
+		private void AlignFacingToInput()
+		{
+			Vector2 input = GetMovementInput();
+			if (Mathf.Abs(input.X) > 0.01f)
+			{
+				Player.FlipFacing(input.X > 0f);
+			}
 		}
 	}
 }

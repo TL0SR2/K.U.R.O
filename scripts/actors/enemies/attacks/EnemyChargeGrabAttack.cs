@@ -8,7 +8,7 @@ namespace Kuros.Actors.Enemies.Attacks
 	/// 1. 玩家进入检测区域后触发预热；
 	/// 2. 预热结束直线冲刺至玩家先前位置；
 	/// 3. 冲刺结束若命中，施加冻结并进入逃脱判定；
-	/// 4. 逃脱失败造成伤害，任一阶段被打断则立即结束。
+	/// 4. 抓取期间由 Spine hit 关键帧触发伤害结算。
     /// </summary>
     public partial class EnemyChargeGrabAttack : EnemyAttackTemplate
     {
@@ -20,14 +20,18 @@ namespace Kuros.Actors.Enemies.Attacks
         [Export(PropertyHint.Range, "10,2000,10")] public float DashSpeed = 600f;
 		[Export(PropertyHint.Range, "0,2000,10")] public float DashDistance = 0f;
         [Export] public bool LockFacingDuringDash = true;
+		[Export(PropertyHint.Range, "0,500,1")] public float MinDashDistanceBeforeGrab = 24f;
+		[Export(PropertyHint.Range, "0,5,0.1")] public float SnapshotDelaySeconds = 0f; // 冲刺前等待一段时间再记录玩家位置
 
         [ExportCategory("Effects")]
 		[Export(PropertyHint.Range, "0,10,0.1")] public float AppliedFrozenDuration = 5.0f;
-        [Export(PropertyHint.Range, "0,1000,1")] public int DamageOnEscapeFailure = 20;
+        [Export(PropertyHint.Range, "0,1000,1")] public int GrabHitDamage = 1;
 		[Export] public StringName CooldownStateName = "CooldownFrozen";
 
 		[ExportCategory("Escape")]
 		[Export(PropertyHint.Range, "0,10,0.1")] public float EscapeWindowSeconds = 0.0f;
+		[Export] public bool GrantInvincibilityOnEscape = true;
+		[Export(PropertyHint.Range, "0,5,0.01")] public float EscapeInvincibilityDuration = 0.0f;
 
 		private const float MinDashDistance = 32f;
 		private const float PostCooldownDuration = 1.0f;
@@ -47,6 +51,26 @@ namespace Kuros.Actors.Enemies.Attacks
 		private bool _skipRecoveryGrab;
 		private float _postAttackCooldown;
 		private bool _pendingCooldownExit;
+        private Vector2 _dashPreviousPosition;
+        private float _dashDistanceTraveled;
+        private bool _canAttemptGrab;
+		private float _snapshotTimer = 0f;
+		private bool _waitingForSnapshot = false;
+		private bool _pendingSkill3Finisher;
+		private bool _grabFrozenDisplacementOriginal = true;
+		private bool _hasGrabFrozenDisplacementOverride;
+
+		public bool IsEvaluatingEscape => _isEvaluatingEscape;
+		public bool IsDashing => _isDashing;
+		public bool IsDashFinished => _dashFinalized;
+		public virtual bool AreEscapeCountersCleared => true;
+		public bool HasPendingSkill3Finisher => _pendingSkill3Finisher;
+		protected float EscapeTimerRemaining => _escapeTimer;
+
+		public void ConsumeSkill3FinisherRequest()
+		{
+			_pendingSkill3Finisher = false;
+		}
 
         protected override void OnInitialized()
         {
@@ -78,8 +102,17 @@ namespace Kuros.Actors.Enemies.Attacks
         {
             if (_detectionArea != null)
             {
-                _detectionArea.BodyEntered -= OnDetectionAreaBodyEntered;
-				_detectionArea.BodyExited -= OnDetectionAreaBodyExited;
+				var entered = new Callable(this, MethodName.OnDetectionAreaBodyEntered);
+				var exited = new Callable(this, MethodName.OnDetectionAreaBodyExited);
+				if (_detectionArea.IsConnected(Area2D.SignalName.BodyEntered, entered))
+				{
+					_detectionArea.BodyEntered -= OnDetectionAreaBodyEntered;
+				}
+
+				if (_detectionArea.IsConnected(Area2D.SignalName.BodyExited, exited))
+				{
+					_detectionArea.BodyExited -= OnDetectionAreaBodyExited;
+				}
             }
 
             base._ExitTree();
@@ -123,6 +156,10 @@ namespace Kuros.Actors.Enemies.Attacks
 			_skipRecoveryGrab = false;
 			_postAttackCooldown = 0f;
 			_pendingCooldownExit = false;
+			_dashPreviousPosition = Enemy?.GlobalPosition ?? Vector2.Zero;
+			_dashDistanceTraveled = 0f;
+			_canAttemptGrab = MinDashDistanceBeforeGrab <= 0f;
+			_pendingSkill3Finisher = false;
 			PrepareDashTowardsPlayer();
 		}
 
@@ -133,6 +170,18 @@ namespace Kuros.Actors.Enemies.Attacks
 			{
 				Enemy.Velocity = Vector2.Zero;
 			}
+
+			// 有延迟则等待，无延迟直接快照
+			if (SnapshotDelaySeconds > 0f)
+			{
+				_snapshotTimer = SnapshotDelaySeconds;
+				_waitingForSnapshot = true;
+			}
+			else
+			{
+				_waitingForSnapshot = false;
+				PrepareDashTowardsPlayer();
+			}
         }
 
         protected override void OnActivePhase()
@@ -140,6 +189,11 @@ namespace Kuros.Actors.Enemies.Attacks
 			if (Enemy == null) return;
 			_isDashing = true;
 			Enemy.Velocity = _dashDirection * DashSpeed;
+
+			if (RequireAnimationHitTrigger)
+			{
+				_animationHitReady = true;
+			}
         }
 
 		private bool HasActiveGrab => _grabbedPlayer != null || _isEvaluatingEscape;
@@ -156,6 +210,10 @@ namespace Kuros.Actors.Enemies.Attacks
 			if (_skipRecoveryGrab)
 			{
 				_skipRecoveryGrab = false;
+				if (RequireAnimationHitTrigger && HasActiveGrab)
+				{
+					_animationHitReady = true;
+				}
 				return;
 			}
 
@@ -166,13 +224,25 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			if (HasActiveGrab)
 			{
+				if (RequireAnimationHitTrigger)
+				{
+					_animationHitReady = true;
+				}
+				return;
+			}
+
+			if (!_canAttemptGrab)
+			{
+				// 未达到可抓取条件时，等待攻击流程自然结束后再进入冷却。
+				_pendingSkill3Finisher = true;
 				return;
 			}
 
 			if (!TryExecuteGrab())
 			{
-				StartPostCooldown();
-				_pendingCooldownExit = true;
+				// 未抓到玩家时，不立即切冷却状态，避免直接打断攻击收尾动画。
+				_pendingSkill3Finisher = true;
+				return;
 			}
 		}
 
@@ -181,6 +251,24 @@ namespace Kuros.Actors.Enemies.Attacks
 			if (Enemy == null || !GodotObject.IsInstanceValid(Enemy) || !Enemy.IsInsideTree())
 			{
 				return;
+			}
+
+			if (!IsEnemyAlive())
+			{
+				AbortActiveGrabDueToEnemyDeath();
+				return;
+			}
+
+			// 快照延迟计时
+			if (_waitingForSnapshot)
+			{
+				_snapshotTimer -= (float)delta;
+				if (_snapshotTimer <= 0f)
+				{
+					_waitingForSnapshot = false;
+					PrepareDashTowardsPlayer(); // 延迟结束，此时快照玩家位置
+				}
+				return; 
 			}
 
 			if (_isEvaluatingEscape && _grabbedPlayer != null)
@@ -229,6 +317,11 @@ namespace Kuros.Actors.Enemies.Attacks
 			// 子类实现具体逃脱判定逻辑
 		}
 
+		protected override bool ShouldHoldRecoveryPhase()
+		{
+			return HasActiveGrab;
+		}
+
 		protected void ResolveEscape(bool escaped)
 		{
 			if (_grabbedPlayer == null)
@@ -243,27 +336,47 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			if (!escaped)
 			{
-				ReleasePlayer(applyDamage: true);
+				ReleasePlayer();
         }
 			else
 			{
-				ReleasePlayer(applyDamage: false);
+				ReleasePlayer();
 			}
 
 			if (player != null)
 			{
+				GrantPlayerInvincibilityAfterEscape(player, escaped);
 				OnEscapeSequenceFinished(player, escaped);
 			}
 
-			if (IsRunning)
-			{
-				Cancel();
-			}
+			// 抓到后进入挣脱，判定结束（成功/失败）都进入 skill3 收尾；伤害由 hit 帧事件结算。
+			_pendingSkill3Finisher = true;
+
+			// 挣脱判定结束后不立即取消攻击，让恢复阶段自然收尾，避免瞬切冷却状态。
 		}
 
 		protected virtual void OnEscapeSequenceStarted(SamplePlayer player) { }
 
 		protected virtual void OnEscapeSequenceFinished(SamplePlayer player, bool escaped) { }
+
+		protected virtual void GrantPlayerInvincibilityAfterEscape(SamplePlayer player, bool escaped)
+		{
+			if (!escaped || !GrantInvincibilityOnEscape)
+			{
+				return;
+			}
+
+			if (player is not Kuros.Actors.Heroes.MainCharacter mainCharacter)
+			{
+				return;
+			}
+
+			float duration = EscapeInvincibilityDuration > 0f
+				? EscapeInvincibilityDuration
+				: mainCharacter.HitInvincibilityDuration;
+
+			mainCharacter.StartHitInvincibility(duration);
+		}
 
 		private void PrepareDashTowardsPlayer()
         {
@@ -274,8 +387,8 @@ namespace Kuros.Actors.Enemies.Attacks
 
 			if (Enemy.PlayerTarget != null)
 			{
-				float targetX = Enemy.PlayerTarget.GlobalPosition.X;
-				recordedTarget = new Vector2(targetX, dashStart.Y);
+				// Snapshot player position only once at dash start; no realtime retargeting during dash.
+				recordedTarget = Enemy.PlayerTarget.GlobalPosition;
 			}
 			else
 			{
@@ -325,6 +438,12 @@ namespace Kuros.Actors.Enemies.Attacks
 				return false;
 			}
 
+			if (player is Kuros.Actors.Heroes.MainCharacter mainCharacter && mainCharacter.IsHitInvincible)
+			{
+				_playerInsideDetection = false;
+				return false;
+			}
+
             if (!IsPlayerInsideGrabZone(player))
             {
 				_playerInsideDetection = false;
@@ -336,7 +455,11 @@ namespace Kuros.Actors.Enemies.Attacks
 			_playerInsideDetection = false;
 
 			_isEvaluatingEscape = true;
-			_escapeTimer = AppliedFrozenDuration;
+			_escapeTimer = EscapeWindowSeconds > 0f ? EscapeWindowSeconds : AppliedFrozenDuration;
+			if (RequireAnimationHitTrigger)
+			{
+				_animationHitReady = true;
+			}
 			OnEscapeSequenceStarted(player);
 			return true;
         }
@@ -345,10 +468,10 @@ namespace Kuros.Actors.Enemies.Attacks
         {
             if (_grabArea != null)
             {
-                return _grabArea.OverlapsBody(player);
+				return player.IsHitByArea(_grabArea);
             }
 
-            return AttackArea != null && AttackArea.OverlapsBody(player);
+			return player.IsHitByArea(AttackArea);
         }
 
         private void ApplyFrozenState(SamplePlayer player)
@@ -356,37 +479,51 @@ namespace Kuros.Actors.Enemies.Attacks
             var frozenState = player.StateMachine?.GetNodeOrNull<PlayerFrozenState>("Frozen");
             if (frozenState != null)
             {
+				_grabFrozenDisplacementOriginal = frozenState.AllowExternalDisplacementWhileFrozen;
+				_hasGrabFrozenDisplacementOverride = true;
+				frozenState.AllowExternalDisplacementWhileFrozen = false;
                 frozenState.FrozenDuration = AppliedFrozenDuration;
 				frozenState.BeginExternalHold();
             player.StateMachine?.ChangeState("Frozen");
 			}
         }
 
-		private void ReleasePlayer(bool applyDamage)
+		private void ReleasePlayer()
 		{
 			if (_grabbedPlayer == null) return;
 
-			if (applyDamage)
-			{
-				var sourcePosition = Enemy?.GlobalPosition;
-				if (Enemy != null)
-				{
-					_grabbedPlayer.TakeDamage(DamageOnEscapeFailure, sourcePosition, Enemy);
-				}
-				else
-				{
-					_grabbedPlayer.TakeDamage(DamageOnEscapeFailure, sourcePosition);
-				}
-				_grabbedPlayer.StateMachine?.ChangeState("Hit");
-			}
-
 			var frozenState = _grabbedPlayer.StateMachine?.GetNodeOrNull<PlayerFrozenState>("Frozen");
-			frozenState?.EndExternalHold();
+			if (frozenState != null)
+			{
+				frozenState.EndExternalHold();
+				if (_hasGrabFrozenDisplacementOverride)
+				{
+					frozenState.AllowExternalDisplacementWhileFrozen = _grabFrozenDisplacementOriginal;
+				}
+			}
+			_hasGrabFrozenDisplacementOverride = false;
 
 			_grabbedPlayer = null;
 
-			StartPostCooldown();
-			_pendingCooldownExit = true;
+			// 交由 OnAttackFinished 统一进入冷却，避免在释放瞬间切状态打断动画。
+		}
+
+		protected override void OnAnimationHit()
+		{
+			if (_grabbedPlayer == null || !IsEnemyAlive())
+			{
+				return;
+			}
+
+			var sourcePosition = Enemy?.GlobalPosition;
+			if (Enemy != null)
+			{
+				_grabbedPlayer.TakeDamage(GrabHitDamage, sourcePosition, Enemy);
+			}
+			else
+			{
+				_grabbedPlayer.TakeDamage(GrabHitDamage, sourcePosition);
+			}
 		}
 
 		private void StartPostCooldown()
@@ -450,20 +587,20 @@ namespace Kuros.Actors.Enemies.Attacks
 		if (_postAttackCooldown > 0f) return;
 
 			bool overlaps = _detectionArea.OverlapsBody(Enemy.PlayerTarget);
-			if (overlaps && !_playerInsideDetection)
+			if (overlaps)
 			{
 				_playerInsideDetection = true;
 				TryRequestAttackFromDetection("Poll");
+				return;
 			}
-			else if (!overlaps && _playerInsideDetection)
-			{
-				_playerInsideDetection = false;
-			}
+
+			_playerInsideDetection = false;
 		}
 
 		private void TryRequestAttackFromDetection(string reason)
 		{
 			if (Enemy == null) return;
+			if (Enemy.IsDeathSequenceActive || Enemy.IsDead) return;
             if (IsRunning || IsOnCooldown) return;
 			if (Enemy.AttackTimer > 0) return;
 			if (HasActiveGrab) return;
@@ -484,7 +621,9 @@ namespace Kuros.Actors.Enemies.Attacks
 		{
 			if (!_isDashing || Enemy == null) return;
 
-			if (Enemy.PlayerTarget != null && IsPlayerInsideGrabZone(Enemy.PlayerTarget))
+			UpdateDashTravelProgress();
+
+			if (_canAttemptGrab && Enemy.PlayerTarget != null && IsPlayerInsideGrabZone(Enemy.PlayerTarget))
 			{
 				FinishDash(forceGrab: true);
 				return;
@@ -521,21 +660,39 @@ namespace Kuros.Actors.Enemies.Attacks
 			}
 
 			Enemy.Velocity = Vector2.Zero;
+			_dashPreviousPosition = Enemy.GlobalPosition;
 			_isDashing = false;
 			if (forceGrab)
 			{
 				_skipRecoveryGrab = true;
 				ForceEnterRecoveryPhase();
+				_canAttemptGrab = true;
 				if (!TryExecuteGrab())
 				{
-					StartPostCooldown();
-					FinishCooldownState();
+					// 强制收尾时若未抓到玩家，保持在攻击流程内，交由 OnAttackFinished 统一进入冷却。
+					_pendingSkill3Finisher = true;
 				}
 				return;
 			}
 
 			ForceEnterRecoveryPhase();
         }
+
+		private void UpdateDashTravelProgress()
+		{
+			if (Enemy == null) return;
+			Vector2 currentPosition = Enemy.GlobalPosition;
+			float moved = (_dashPreviousPosition - currentPosition).Length();
+			if (moved > 0f)
+			{
+				_dashDistanceTraveled += moved;
+				_dashPreviousPosition = currentPosition;
+				if (!_canAttemptGrab && _dashDistanceTraveled >= MinDashDistanceBeforeGrab)
+				{
+					_canAttemptGrab = true;
+				}
+			}
+		}
 
         private Area2D? ResolveArea(NodePath path)
         {
@@ -563,10 +720,46 @@ namespace Kuros.Actors.Enemies.Attacks
             }
         }
 
+		private bool IsEnemyAlive()
+		{
+			return Enemy != null && !Enemy.IsDeathSequenceActive && !Enemy.IsDead;
+		}
+
+		private void AbortActiveGrabDueToEnemyDeath()
+		{
+			if (_grabbedPlayer != null)
+			{
+				var player = _grabbedPlayer;
+				ReleasePlayer();
+				OnEscapeSequenceFinished(player, escaped: false);
+			}
+
+			_isEvaluatingEscape = false;
+			_escapeTimer = 0f;
+			_isDashing = false;
+			_waitingForSnapshot = false;
+			_snapshotTimer = 0f;
+			_playerInsideDetection = false;
+			_pendingSkill3Finisher = false;
+			_skipRecoveryGrab = false;
+			_animationHitReady = false;
+
+			if (IsRunning)
+			{
+				Cancel(clearCooldown: true);
+			}
+		}
+
 		protected override void OnAttackFinished()
 		{
 			base.OnAttackFinished();
 			_playerInsideDetection = false;
+			if (!IsEnemyAlive())
+			{
+				_skipRecoveryGrab = false;
+				return;
+			}
+
 			if (_grabbedPlayer == null && _postAttackCooldown <= 0f)
 			{
 				StartPostCooldown();

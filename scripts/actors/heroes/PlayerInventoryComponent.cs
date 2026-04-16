@@ -17,11 +17,14 @@ namespace Kuros.Actors.Heroes
     public partial class PlayerInventoryComponent : Node
     {
         [Export(PropertyHint.Range, "1,200,1")]
-        public int BackpackSlots { get; set; } = 4;
+        public int BackpackSlots { get; set; } = 5;
+        [Export(PropertyHint.Range, "1,20,1")]
+        public int MaxCarriedWeaponCount { get; set; } = 5;
 
         public InventoryContainer Backpack { get; private set; } = null!;
         public InventoryContainer? QuickBar { get; set; }
         [Export] public ItemDefinition? UnarmedWeaponDefinition { get; set; }
+        [Export] public bool ReserveQuickBarSlot0ForDefaultWeapon { get; set; } = false;
         private const string DefaultUnarmedWeaponPath = "res://resources/items/Weapon_Unarmed_Default.tres";
 
         // 跟踪已获得的物品ID（用于判断是否是第一次获得）
@@ -40,13 +43,35 @@ namespace Kuros.Actors.Heroes
         public IReadOnlyDictionary<string, SpecialInventorySlot> SpecialSlots => _specialSlots;
         public SpecialInventorySlot? WeaponSlot => GetSpecialSlot(SpecialInventorySlotIds.PrimaryWeapon);
         public int SelectedBackpackSlot { get; private set; }
-        public bool HasSelectedItem => GetSelectedBackpackStack() != null;
+        public bool HasSelectedItem
+        {
+            get
+            {
+                var stack = GetSelectedBackpackStack();
+                return stack != null && !stack.IsEmpty && stack.Item.ItemId != "empty_item";
+            }
+        }
         
         /// <summary>
-        /// 當前左手選中的快捷欄槽位索引（1-4，對應快捷欄2-5）
+        /// 當前選中的快捷欄槽位索引（0-4，對應快捷欄1-5）
         /// -1 表示未選中任何槽位
         /// </summary>
-        public int SelectedQuickBarSlot { get; set; } = 1;
+        public int SelectedQuickBarSlot
+        {
+            get => _selectedQuickBarSlot;
+            set
+            {
+                if (_selectedQuickBarSlot == value)
+                {
+                    return;
+                }
+
+                _selectedQuickBarSlot = value;
+                QuickBarSlotChanged?.Invoke(_selectedQuickBarSlot);
+            }
+        }
+        // 默认选择快捷栏第1格（索引0），确保首次拾取优先进入第1格。
+        private int _selectedQuickBarSlot = 0;
         
         /// <summary>
         /// 檢查左手選中的快捷欄槽位是否有物品
@@ -66,6 +91,8 @@ namespace Kuros.Actors.Heroes
         public event Action<ItemDefinition>? WeaponEquipped;
         public event Action? WeaponUnequipped;
         public event Action<int>? ActiveBackpackSlotChanged;
+        public event Action? QuickBarAssigned;
+        public event Action<int>? QuickBarSlotChanged;
 
         public override void _Ready()
         {
@@ -101,7 +128,18 @@ namespace Kuros.Actors.Heroes
         /// </summary>
         public void SetQuickBar(InventoryContainer quickBar)
         {
+            if (quickBar == null)
+            {
+                return;
+            }
+
+            if (QuickBar == quickBar)
+            {
+                return;
+            }
+
             QuickBar = quickBar;
+            QuickBarAssigned?.Invoke();
         }
 
         /// <summary>
@@ -132,7 +170,7 @@ namespace Kuros.Actors.Heroes
         /// 1. 優先放入當前選中的快捷欄槽位（左手選中的槽位）
         /// 2. 如果選中槽位已有物品，依次查看快捷欄的各個索引（1-4），優先放置在最左側的空槽位
         /// 3. 快捷欄1（索引0）是小木劍，永遠不會被更改
-        /// 4. 快捷欄滿時，溢出的物品放置到物品欄中
+        /// 4. 快捷欄滿時，溢出的物品放置到物品欄中；總武器攜帶上限由 MaxCarriedWeaponCount 控制
         /// </summary>
         public int AddItemSmart(ItemDefinition item, int amount, bool showPopupIfFirstTime = true)
         {
@@ -150,15 +188,32 @@ namespace Kuros.Actors.Heroes
                 return 0;
             }
 
+            int requestedAmount = amount;
+            if (IsWeaponItem(item))
+            {
+                int currentWeaponCount = GetCarriedWeaponCount();
+                int remainingWeaponCapacity = Math.Max(0, MaxCarriedWeaponCount - currentWeaponCount);
+                if (remainingWeaponCapacity <= 0)
+                {
+                    GameLogger.Info(nameof(PlayerInventoryComponent), $"AddItemSmart: 武器栏已满（{currentWeaponCount}/{MaxCarriedWeaponCount}），无法拾取 '{item.DisplayName}'。");
+                    return 0;
+                }
+
+                requestedAmount = Math.Min(requestedAmount, remainingWeaponCapacity);
+            }
+
             // 确保 remaining 从已验证的正数 amount 初始化
-            int remaining = amount;
+            int remaining = requestedAmount;
             bool isFirstTime = IsFirstTimeObtaining(item);
 
-            // 优先放入快捷栏（索引1-4，因为索引0是默认小木剑，需要跳过）
+            // 优先放入快捷栏（默认包含索引0；若保留默认武器槽则从索引1开始）
             if (QuickBar != null && remaining > 0)
             {
+                int quickBarStart = ReserveQuickBarSlot0ForDefaultWeapon ? 1 : 0;
+                const int quickBarEndExclusive = 5;
+
                 // 步驟1：優先嘗試放入當前選中的快捷欄槽位
-                if (SelectedQuickBarSlot >= 1 && SelectedQuickBarSlot <= 4)
+                if (SelectedQuickBarSlot >= quickBarStart && SelectedQuickBarSlot < quickBarEndExclusive)
                 {
                     var selectedStack = QuickBar.GetStack(SelectedQuickBarSlot);
                     // 檢查選中槽位是否為空、空白道具或可合併的相同物品
@@ -175,7 +230,7 @@ namespace Kuros.Actors.Heroes
                 }
                 
                 // 步驟2：如果還有剩餘，嘗試合併到已有相同物品的槽位
-                for (int i = 1; i < 5 && remaining > 0; i++)
+                for (int i = quickBarStart; i < quickBarEndExclusive && remaining > 0; i++)
                 {
                     if (i == SelectedQuickBarSlot) continue; // 跳過已處理的選中槽位
                     
@@ -194,7 +249,7 @@ namespace Kuros.Actors.Heroes
                 // 步驟3：如果还有剩余，找到最左側的空槽位或空白道具槽位添加
                 if (remaining > 0)
                 {
-                    for (int i = 1; i < 5 && remaining > 0; i++)
+                    for (int i = quickBarStart; i < quickBarEndExclusive && remaining > 0; i++)
                     {
                         if (i == SelectedQuickBarSlot) continue; // 跳過已處理的選中槽位
                         
@@ -221,7 +276,7 @@ namespace Kuros.Actors.Heroes
                 remaining -= addedToBackpack;
             }
 
-            int totalAdded = amount - remaining;
+            int totalAdded = requestedAmount - remaining;
 
             // 如果成功添加了物品且是第一次获得，标记为已获得
             if (totalAdded > 0 && isFirstTime)
@@ -496,6 +551,13 @@ namespace Kuros.Actors.Heroes
         public float GetSelectedAttributeValue(string attributeId, float defaultValue = 0f)
         {
             if (string.IsNullOrWhiteSpace(attributeId)) return defaultValue;
+
+            var quickBarStack = GetSelectedQuickBarStack();
+            if (quickBarStack != null && !quickBarStack.IsEmpty && quickBarStack.Item.ItemId != "empty_item")
+            {
+                return quickBarStack.GetAttributeValue(attributeId, defaultValue);
+            }
+
             var stack = GetSelectedBackpackStack();
             if (stack != null)
             {
@@ -513,8 +575,47 @@ namespace Kuros.Actors.Heroes
 
         public ItemDefinition? GetCurrentWeaponDefinition()
         {
-            var stack = GetSelectedBackpackStack();
-            return stack?.Item ?? UnarmedWeaponDefinition;
+            return GetActiveCombatWeaponDefinition() ?? UnarmedWeaponDefinition;
+        }
+
+        public InventoryItemStack? GetEquippedWeaponStack()
+        {
+            var slot = GetSpecialSlot(SpecialInventorySlotIds.PrimaryWeapon);
+            if (slot == null || slot.IsEmpty)
+            {
+                return null;
+            }
+
+            var stack = slot.Stack;
+            if (stack == null || stack.IsEmpty)
+            {
+                return null;
+            }
+
+            return stack;
+        }
+
+        public ItemDefinition? GetActiveCombatWeaponDefinition()
+        {
+            var equippedStack = GetEquippedWeaponStack();
+            if (equippedStack != null && equippedStack.Item != null)
+            {
+                return equippedStack.Item;
+            }
+
+            var quickBarStack = GetSelectedQuickBarStack();
+            if (quickBarStack != null && !quickBarStack.IsEmpty && quickBarStack.Item.ItemId != "empty_item")
+            {
+                return quickBarStack.Item;
+            }
+
+            var backpackStack = GetSelectedBackpackStack();
+            if (backpackStack != null && !backpackStack.IsEmpty && backpackStack.Item.ItemId != "empty_item")
+            {
+                return backpackStack.Item;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -522,7 +623,7 @@ namespace Kuros.Actors.Heroes
         /// </summary>
         public InventoryItemStack? GetSelectedQuickBarStack()
         {
-            if (QuickBar == null || SelectedQuickBarSlot < 1 || SelectedQuickBarSlot > 4)
+            if (QuickBar == null || SelectedQuickBarSlot < 0 || SelectedQuickBarSlot > 4)
             {
                 return null;
             }
@@ -535,7 +636,7 @@ namespace Kuros.Actors.Heroes
         public bool TryExtractFromSelectedQuickBarSlot(int amount, out InventoryItemStack? extracted)
         {
             extracted = null;
-            if (QuickBar == null || SelectedQuickBarSlot < 1 || SelectedQuickBarSlot > 4)
+            if (QuickBar == null || SelectedQuickBarSlot < 0 || SelectedQuickBarSlot > 4)
             {
                 return false;
             }
@@ -552,7 +653,7 @@ namespace Kuros.Actors.Heroes
             {
                 return false;
             }
-            if (SelectedQuickBarSlot < 1 || SelectedQuickBarSlot > 4)
+            if (SelectedQuickBarSlot < 0 || SelectedQuickBarSlot > 4)
             {
                 return false;
             }
@@ -570,6 +671,29 @@ namespace Kuros.Actors.Heroes
             }
 
             return true;
+        }
+
+        public int GetCarriedWeaponCount()
+        {
+            int total = 0;
+            total += CountWeaponStacksInContainer(Backpack);
+            total += CountWeaponStacksInContainer(QuickBar);
+
+            foreach (var slot in _specialSlots.Values)
+            {
+                var stack = slot?.Stack;
+                if (stack == null || stack.IsEmpty || stack.Item == null)
+                {
+                    continue;
+                }
+
+                if (IsWeaponItem(stack.Item))
+                {
+                    total += Math.Max(1, stack.Quantity);
+                }
+            }
+
+            return total;
         }
 
         public float GetBackpackAttributeValue(string attributeId, float baseValue = 0f)
@@ -615,6 +739,41 @@ namespace Kuros.Actors.Heroes
             if (resolved == null) return false;
             slot = resolved;
             return true;
+        }
+
+        private static bool IsWeaponItem(ItemDefinition? item)
+        {
+            if (item == null || string.IsNullOrWhiteSpace(item.ItemId) || item.ItemId == "empty_item")
+            {
+                return false;
+            }
+
+            return item.HasTag(ItemTagIds.Weapon) ||
+                   string.Equals(item.Category, "Weapon", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int CountWeaponStacksInContainer(InventoryContainer? container)
+        {
+            if (container == null)
+            {
+                return 0;
+            }
+
+            int total = 0;
+            foreach (var stack in container.Slots)
+            {
+                if (stack == null || stack.IsEmpty || stack.Item == null)
+                {
+                    continue;
+                }
+
+                if (IsWeaponItem(stack.Item))
+                {
+                    total += Math.Max(1, stack.Quantity);
+                }
+            }
+
+            return total;
         }
 
         private void InitializeSpecialSlots()

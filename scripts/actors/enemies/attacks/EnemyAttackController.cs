@@ -108,6 +108,14 @@ namespace Kuros.Actors.Enemies.Attacks
                 return;
             }
 
+            if (!GodotObject.IsInstanceValid(_currentAttack))
+            {
+                DebugLog("Queued attack instance became invalid before start.");
+                _currentAttack = null;
+                FinishControllerAttack("ChildInvalidBeforeStart");
+                return;
+            }
+
 			if (!_currentAttack.CanStart())
 			{
 				DebugLog($"Attack {_currentAttack.Name} cannot start (likely cooldown/range).");
@@ -151,6 +159,12 @@ namespace Kuros.Actors.Enemies.Attacks
         {
             base._PhysicsProcess(delta);
             if (_currentAttack == null) return;
+            if (!GodotObject.IsInstanceValid(_currentAttack))
+            {
+                _currentAttack = null;
+                FinishControllerAttack("ChildInvalid");
+                return;
+            }
 
             _currentAttack.Tick(delta);
             if (!_currentAttack.IsRunning)
@@ -280,8 +294,17 @@ namespace Kuros.Actors.Enemies.Attacks
         {
             if (_playerDetectionArea != null)
             {
-                _playerDetectionArea.BodyEntered -= OnDetectionAreaBodyEntered;
-                _playerDetectionArea.BodyExited -= OnDetectionAreaBodyExited;
+                var entered = new Callable(this, MethodName.OnDetectionAreaBodyEntered);
+                var exited = new Callable(this, MethodName.OnDetectionAreaBodyExited);
+                if (_playerDetectionArea.IsConnected(Area2D.SignalName.BodyEntered, entered))
+                {
+                    _playerDetectionArea.BodyEntered -= OnDetectionAreaBodyEntered;
+                }
+
+                if (_playerDetectionArea.IsConnected(Area2D.SignalName.BodyExited, exited))
+                {
+                    _playerDetectionArea.BodyExited -= OnDetectionAreaBodyExited;
+                }
             }
             base._ExitTree();
         }
@@ -329,7 +352,7 @@ namespace Kuros.Actors.Enemies.Attacks
 
         private bool ShouldForceAttackState()
         {
-            if (Enemy?.StateMachine == null) return false;
+            if (!IsEnemyAlive() || Enemy?.StateMachine == null) return false;
             if (_queuedAttack == null) return false;
             if (_queuedAttack.CanStart())
             {
@@ -338,6 +361,11 @@ namespace Kuros.Actors.Enemies.Attacks
             }
 
             return false;
+        }
+
+        private bool IsEnemyAlive()
+        {
+            return Enemy != null && !Enemy.IsDeathSequenceActive && !Enemy.IsDead;
         }
 
         private void DebugLog(string message)
@@ -426,6 +454,12 @@ namespace Kuros.Actors.Enemies.Attacks
         private void CleanupChildAttack(bool clearCooldown)
         {
             if (_currentAttack == null) return;
+            if (!GodotObject.IsInstanceValid(_currentAttack))
+            {
+                _currentAttack = null;
+                return;
+            }
+
             if (_currentAttack.IsRunning)
             {
                 _currentAttack.Cancel(clearCooldown);

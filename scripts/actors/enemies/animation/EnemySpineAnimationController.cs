@@ -6,7 +6,9 @@ namespace Kuros.Actors.Enemies.Animation
     public enum SpineAnimationPlaybackMode
     {
         Loop,
-        Once
+        Once,
+        PartialLoop,
+        PartialOnce
     }
 
     /// <summary>
@@ -18,6 +20,12 @@ namespace Kuros.Actors.Enemies.Animation
         [Export(PropertyHint.Range, "0,4,1")] public int TrackIndex { get; set; } = 0;
         [Export(PropertyHint.Range, "0,4,1")] public int QueueTrackIndex { get; set; } = 0;
         [Export] public string DefaultLoopAnimation { get; set; } = string.Empty;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float IdleMixDuration = 0.05f;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float WalkMixDuration = 0.05f;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float HitMixDuration = 0.05f;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float DieMixDuration = 0.05f;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float AttackMixDuration = 0.5f;
+        [Export(PropertyHint.Range, "0,1,0.01")] public float SkillMixDuration = 0.5f;
 
         protected SampleEnemy? Enemy { get; private set; }
         
@@ -48,8 +56,16 @@ namespace Kuros.Actors.Enemies.Animation
         {
             if (!string.IsNullOrEmpty(DefaultLoopAnimation))
             {
-                PlayLoop(DefaultLoopAnimation);
+                PlayLoop(DefaultLoopAnimation, GetPreferredMixDuration());
             }
+        }
+
+        /// <summary>
+        /// 子类可覆写该方法，统一提供当前控制器期望的默认混合时长。
+        /// </summary>
+        protected virtual float GetPreferredMixDuration()
+        {
+            return 0.5f;
         }
 
         /// <summary>
@@ -60,12 +76,12 @@ namespace Kuros.Actors.Enemies.Animation
             return true; 
         }
 
-        protected bool PlayLoop(string animationName, float mixDuration = 0.1f, float timeScale = 1f)
+        protected bool PlayLoop(string animationName, float mixDuration = 0.5f, float timeScale = 1f)
         {
             return PlayInternal(animationName, SpineAnimationPlaybackMode.Loop, mixDuration, timeScale);
         }
 
-        protected bool PlayOnce(string animationName, float mixDuration = 0.1f, float timeScale = 1f, string? followUpAnimation = null)
+        protected bool PlayOnce(string animationName, float mixDuration = 0.5f, float timeScale = 1f, string? followUpAnimation = null)
         {
             if (!PlayInternal(animationName, SpineAnimationPlaybackMode.Once, mixDuration, timeScale))
             {
@@ -75,13 +91,13 @@ namespace Kuros.Actors.Enemies.Animation
             var fallback = followUpAnimation ?? DefaultLoopAnimation;
             if (!string.IsNullOrEmpty(fallback))
             {
-                QueueAnimation(fallback, SpineAnimationPlaybackMode.Loop, 0f);
+                QueueAnimation(fallback, SpineAnimationPlaybackMode.Loop, 0f, GetPreferredMixDuration());
             }
 
             return true;
         }
 
-        protected bool QueueAnimation(string animationName, SpineAnimationPlaybackMode mode, float delaySeconds = 0f, float mixDuration = 0.1f, float timeScale = 1f)
+        protected bool QueueAnimation(string animationName, SpineAnimationPlaybackMode mode, float delaySeconds = 0f, float mixDuration = 0.5f, float timeScale = 1f)
         {
             if (string.IsNullOrEmpty(animationName) || _spineHelper == null)
             {
@@ -104,7 +120,7 @@ namespace Kuros.Actors.Enemies.Animation
             }
         }
 
-        protected bool PlayEmpty(float mixDuration = 0.1f)
+        protected bool PlayEmpty(float mixDuration = 0.5f)
         {
             if (_spineHelper == null) return false;
             
@@ -116,6 +132,66 @@ namespace Kuros.Actors.Enemies.Animation
             }
             catch
             {
+                return false;
+            }
+        }
+
+        protected bool PlayPartialLoop(string animationName, float loopStart, float loopEnd, float mixDuration = 0.5f, float timeScale = 1f)
+        {
+            if (string.IsNullOrEmpty(animationName) || _spineHelper == null || loopEnd <= loopStart)
+            {
+                return false;
+            }
+
+            Node targetRoot = Owner ?? (Node?)Enemy ?? this;
+            try
+            {
+                var result = _spineHelper.Call("play_partial_loop_animation", targetRoot, animationName, loopStart, loopEnd, mixDuration, timeScale);
+                return result.AsBool();
+            }
+            catch (Exception ex)
+            {
+                GD.PushWarning($"[{Name}] PlayPartialLoop Failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        protected bool PlayPartialOnce(string animationName, float partStart, float partEnd, float mixDuration = 0.5f, float timeScale = 1f)
+        {
+            if (string.IsNullOrEmpty(animationName) || _spineHelper == null || partEnd <= partStart)
+            {
+                return false;
+            }
+
+            Node targetRoot = Owner ?? (Node?)Enemy ?? this;
+            try
+            {
+                var result = _spineHelper.Call("play_partial_once_animation", targetRoot, animationName, partStart, partEnd, mixDuration, timeScale);
+                return result.AsBool();
+            }
+            catch (Exception ex)
+            {
+                GD.PushWarning($"[{Name}] PlayPartialOnce Failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        protected bool UpdatePartialLoop(float loopStart, float loopEnd)
+        {
+            if (_spineHelper == null || loopEnd <= loopStart)
+            {
+                return false;
+            }
+
+            Node targetRoot = Owner ?? (Node?)Enemy ?? this;
+            try
+            {
+                var result = _spineHelper.Call("update_partial_loop_animation", targetRoot, TrackIndex, loopStart, loopEnd);
+                return result.AsBool();
+            }
+            catch (Exception ex)
+            {
+                GD.PushWarning($"[{Name}] UpdatePartialLoop Failed: {ex.Message}");
                 return false;
             }
         }
